@@ -1,0 +1,74 @@
+/*
+Copyright © 2024 Acronis International GmbH.
+
+Released under MIT license.
+*/
+
+syntax = "proto3";
+
+package idp_token;
+
+option go_package = "./pb";
+
+service IDPTokenService {
+  // CreateToken creates a new token based on the provided assertion.
+  // Currently only "urn:ietf:params:oauth:grant-type:jwt-bearer" grant type is supported.
+  rpc CreateToken (CreateTokenRequest) returns (CreateTokenResponse);
+
+  // IntrospectToken returns information about the token including its scopes.
+  // The token is considered active if
+  //  1) it's not expired;
+  //  2) it's not revoked;
+  //  3) it has has the valid signature.
+  rpc IntrospectToken (IntrospectTokenRequest) returns (IntrospectTokenResponse);
+}
+
+message CreateTokenRequest {
+  reserved 4 to 50;
+  string grant_type = 1; // example: urn:ietf:params:oauth:grant-type:jwt-bearer
+  string assertion = 2;
+  uint32 token_version = 3;
+}
+
+message CreateTokenResponse {
+  reserved 4 to 50;
+  string access_token = 1;
+  string token_type = 2;
+  int64 expires_in = 3;
+}
+
+message IntrospectionScopeFilter {
+  reserved 2 to 50;
+  string ResourceNamespace = 1;
+}
+
+message IntrospectTokenRequest {
+  reserved 3 to 50;
+  string token = 1;
+  repeated IntrospectionScopeFilter scope_filter = 2;
+}
+
+message AccessTokenScope {
+  reserved 7 to 50;
+  string tenant_uuid = 1;
+  int64 tenant_int_id = 2;
+  string ResourceServer = 3;
+  string ResourceNamespace = 4;
+  string ResourcePath = 5;
+  string RoleName = 6;
+}
+
+message IntrospectTokenResponse {
+  reserved 12 to 100;
+  bool active = 1;
+  string token_type = 2;
+  int64 exp = 3;
+  repeated string aud = 4;
+  string jti = 5;
+  string iss = 6;
+  string sub = 7;
+  string sub_type = 8;
+  string client_id = 9;
+  string owner_tenant_uuid = 10; // API client owner tenant UUID.
+  repeated AccessTokenScope scope = 11;
+}

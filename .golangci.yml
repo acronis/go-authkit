@@ -1,0 +1,78 @@
+linters-settings:
+  gocyclo:
+    min-complexity: 25
+  goconst:
+    min-len: 2
+    min-occurrences: 2
+  misspell:
+    locale: US
+  lll:
+    line-length: 140
+  goimports:
+    local-prefixes: github.com/acronis/go-authkit/
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+      - experimental
+    disabled-checks:
+      - whyNoLint
+      - paramTypeCombine
+      - sloppyReassign
+    settings:
+      hugeParam:
+        sizeThreshold: 256
+      rangeValCopy:
+        sizeThreshold: 256
+  funlen:
+    lines: 120
+    statements: 60
+
+linters:
+  disable-all: true
+  enable:
+    - bodyclose
+    - dogsled
+    - errcheck
+    - exportloopref
+    - funlen
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - goimports
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - nakedret
+    - staticcheck
+    - stylecheck
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+
+issues:
+  # Don't use default excluding to be sure all exported things (method, functions, consts and so on) have comments.
+  exclude-use-default: false
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - dogsled
+        - ineffassign
+        - funlen
+        - gocritic
+        - gocyclo
+        - gosec
+        - goconst
+        - govet
+        - lll
+        - staticcheck
+        - unused
+        - unparam

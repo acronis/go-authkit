@@ -1,0 +1,9 @@
+exclude:
+  - message: Exclude values in test files and primitives for testing
+    paths:
+      - idptest/jwks_handler.go
+      - jwt/jwt_test.go
+
+  - message: Skip false positive high-entropy sequences
+    id: high-entropy
+    pattern: cfgKeyIntrospectionGRPCTLSEnabled
