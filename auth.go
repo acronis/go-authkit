@@ -167,7 +167,6 @@ func NewTokenIntrospector(
 		HTTPClient:                    &http.Client{Timeout: httpClientRequestTimeout},
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
 		Logger:                        logger,
-		MinJWTVersion:                 cfg.Introspection.MinJWTVersion,
 		ScopeFilter:                   scopeFilter,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		PrometheusLibInstanceLabel:    options.prometheusLibInstanceLabel,

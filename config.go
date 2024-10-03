@@ -36,7 +36,6 @@ const (
 	cfgKeyIntrospectionGRPCTLSClientCert       = "auth.introspection.grpc.tls.clientCert"
 	cfgKeyIntrospectionGRPCTLSClientKey        = "auth.introspection.grpc.tls.clientKey"
 	cfgKeyIntrospectionAccessTokenScope        = "auth.introspection.accessTokenScope" // nolint:gosec // false positive
-	cfgKeyIntrospectionMinJWTVer               = "auth.introspection.minJWTVersion"
 	cfgKeyIntrospectionClaimsCacheEnabled      = "auth.introspection.claimsCache.enabled"
 	cfgKeyIntrospectionClaimsCacheMaxEntries   = "auth.introspection.claimsCache.maxEntries"
 	cfgKeyIntrospectionClaimsCacheTTL          = "auth.introspection.claimsCache.ttl"
@@ -67,11 +66,6 @@ type IntrospectionConfig struct {
 
 	Endpoint         string
 	AccessTokenScope []string
-
-	// MinJWTVersion is a minimum version of JWT that will be accepted for introspection.
-	// NOTE: it's a temporary solution for determining whether introspection is needed or not,
-	// and it will be removed in the future.
-	MinJWTVersion int
 
 	ClaimsCache   IntrospectionCacheConfig
 	NegativeCache IntrospectionCacheConfig
@@ -152,7 +146,6 @@ func (c *Config) SetProviderDefaults(dp config.DataProvider) {
 	dp.SetDefault(cfgKeyGRPCClientRequestTimeout, DefaultGRPCClientRequestTimeout.String())
 	dp.SetDefault(cfgKeyJWTClaimsCacheMaxEntries, jwt.DefaultClaimsCacheMaxEntries)
 	dp.SetDefault(cfgKeyJWKSCacheUpdateMinInterval, jwks.DefaultCacheUpdateMinInterval.String())
-	dp.SetDefault(cfgKeyIntrospectionMinJWTVer, idptoken.MinJWTVersionForIntrospection)
 	dp.SetDefault(cfgKeyIntrospectionClaimsCacheMaxEntries, idptoken.DefaultIntrospectionClaimsCacheMaxEntries)
 	dp.SetDefault(cfgKeyIntrospectionClaimsCacheTTL, idptoken.DefaultIntrospectionClaimsCacheTTL.String())
 	dp.SetDefault(cfgKeyIntrospectionNegativeCacheMaxEntries, idptoken.DefaultIntrospectionNegativeCacheMaxEntries)
@@ -255,13 +248,6 @@ func (c *Config) setIntrospectionConfig(dp config.DataProvider) error {
 
 	if c.Introspection.AccessTokenScope, err = dp.GetStringSlice(cfgKeyIntrospectionAccessTokenScope); err != nil {
 		return err
-	}
-
-	if c.Introspection.MinJWTVersion, err = dp.GetInt(cfgKeyIntrospectionMinJWTVer); err != nil {
-		return err
-	}
-	if c.Introspection.MinJWTVersion < 0 {
-		return dp.WrapKeyErr(cfgKeyIntrospectionMinJWTVer, fmt.Errorf("minimum JWT version should be non-negative"))
 	}
 
 	// Claims cache

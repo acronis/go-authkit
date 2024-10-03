@@ -55,7 +55,6 @@ auth:
         ttl: 77s
     accessTokenScope:
       - token_introspector
-    minJWTVersion: 3
     grpc:
       target: "127.0.0.1:1234"
       tls:
@@ -102,7 +101,6 @@ auth:
 				TTL:        time.Second * 77,
 			},
 			AccessTokenScope: []string{"token_introspector"},
-			MinJWTVersion:    3,
 			GRPC: IntrospectionGRPCConfig{
 				Target: "127.0.0.1:1234",
 				TLS: GRPCTLSConfig{
@@ -239,16 +237,6 @@ auth:
 `,
 			errKey: cfgKeyIntrospectionAccessTokenScope,
 			errMsg: " unable to cast",
-		},
-		{
-			name: "negative introspection min JWT version",
-			cfgData: `
-auth:
-  introspection:
-    minJWTVersion: -1
-`,
-			errKey: cfgKeyIntrospectionMinJWTVer,
-			errMsg: "minimum JWT version should be non-negative",
 		},
 	}
 

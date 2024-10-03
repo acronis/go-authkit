@@ -7,6 +7,7 @@ Released under MIT license.
 package idptoken
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,8 +32,6 @@ const DefaultRequestTimeout = 30 * time.Second
 const JWTTypeAccessToken = "at+jwt"
 
 const TokenTypeBearer = "bearer"
-
-const MinJWTVersionForIntrospection = 0
 
 const minAccessTokenProviderInvalidationInterval = time.Minute
 
@@ -95,15 +94,6 @@ type IntrospectorOpts struct {
 	// when given issuer from JWT is not found in the list of trusted ones.
 	TrustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 
-	// MinJWTVersion is a minimum JWT version for introspection.
-	// If JWT version is less than this value, then introspection will not be done
-	// and ErrTokenIntrospectionNotNeeded will be returned.
-	// Version is a value of "ver" field in JWT header.
-	// By default, it is 0.
-	// NOTE: it's a temporary solution for determining whether introspection is needed or not,
-	// and it will be removed in the future.
-	MinJWTVersion int
-
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
 	PrometheusLibInstanceLabel string
@@ -115,8 +105,7 @@ type Introspector struct {
 	accessTokenProviderInvalidatedAt atomic.Value
 	accessTokenScope                 []string
 
-	minJWTVersion int
-	jwtParser     *jwtgo.Parser
+	jwtParser *jwtgo.Parser
 
 	grpcClient    *GRPCClient
 	staticHTTPURL string
@@ -173,7 +162,6 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		scopeFilterFormURLEncoded:     scopeFilterFormURLEncoded,
 		scopeFilter:                   opts.ScopeFilter,
 		staticHTTPURL:                 opts.StaticHTTPEndpoint,
-		minJWTVersion:                 opts.MinJWTVersion,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
 		promMetrics:                   promMetrics,
@@ -234,14 +222,16 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	if jwtHeaderBytes, err = i.jwtParser.DecodeSegment(token[:jwtHeaderEndIdx]); err != nil {
 		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("decode JWT header: %w", err))
 	}
+	headerDecoder := json.NewDecoder(bytes.NewReader(jwtHeaderBytes))
+	headerDecoder.UseNumber()
 	jwtHeader := make(map[string]interface{})
-	if err = json.Unmarshal(jwtHeaderBytes, &jwtHeader); err != nil {
+	if err = headerDecoder.Decode(&jwtHeader); err != nil {
 		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("unmarshal JWT header: %w", err))
 	}
 	if typ, ok := jwtHeader["typ"].(string); !ok || !strings.EqualFold(typ, JWTTypeAccessToken) {
 		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("token type is not %s", JWTTypeAccessToken))
 	}
-	if ver, ok := jwtHeader["ver"].(float64); ok && int(ver) < i.minJWTVersion {
+	if !checkIntrospectionRequiredByJWTHeader(jwtHeader) {
 		return nil, ErrTokenIntrospectionNotNeeded
 	}
 
@@ -399,4 +389,26 @@ func makeTokenNotIntrospectableError(inner error) error {
 
 func makeBearerToken(token string) string {
 	return "Bearer " + token
+}
+
+// checkIntrospectionRequiredByJWTHeader checks if introspection is required by JWT header.
+// Introspection is required by default.
+func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) bool {
+	notRequiredIntrospection, ok := jwtHeader["nri"]
+	if !ok {
+		return true
+	}
+	var bVal bool
+	if bVal, ok = notRequiredIntrospection.(bool); ok {
+		return !bVal
+	}
+	var nVal json.Number
+	if nVal, ok = notRequiredIntrospection.(json.Number); ok {
+		iVal, err := nVal.Int64()
+		if err != nil {
+			return true
+		}
+		return iVal == 0
+	}
+	return true
 }
