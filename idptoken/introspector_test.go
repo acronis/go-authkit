@@ -153,17 +153,27 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			},
 		},
 		{
-			name: "error, dynamic introspection endpoint, introspection is not needed",
-			introspectorOpts: idptoken.IntrospectorOpts{
-				MinJWTVersion: 3,
-			},
+			name: "error, dynamic introspection endpoint, nri is 1",
 			token: idptest.MustMakeTokenStringWithHeader(jwt.Claims{
 				RegisteredClaims: jwtgo.RegisteredClaims{
 					Subject:   uuid.NewString(),
 					ID:        uuid.NewString(),
 					ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
 				},
-			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"ver": 2}),
+			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"nri": 1}),
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorIs(t, err, idptoken.ErrTokenIntrospectionNotNeeded)
+			},
+		},
+		{
+			name: "error, dynamic introspection endpoint, nri is true",
+			token: idptest.MustMakeTokenStringWithHeader(jwt.Claims{
+				RegisteredClaims: jwtgo.RegisteredClaims{
+					Subject:   uuid.NewString(),
+					ID:        uuid.NewString(),
+					ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+				},
+			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"nri": true}),
 			checkError: func(t *gotesting.T, err error) {
 				require.ErrorIs(t, err, idptoken.ErrTokenIntrospectionNotNeeded)
 			},

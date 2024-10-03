@@ -67,8 +67,7 @@ func NewGRPCClientWithOpts(
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = time.Second * 30
 	}
-	dialCtx := context.Background() // context.Background() is ok since we don't use grpc.WithBlock()
-	conn, err := grpc.DialContext(dialCtx, target,
+	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithStatsHandler(&statsHandler{logger: opts.Logger}),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
