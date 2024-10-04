@@ -1,101 +1,125 @@
-# Simple library in Go with primitives for performing authentication and authorization
+# Toolkit for simplifying authentication and authorization in Go services
 
-The library includes the following packages:
-+ `auth` (root directory) - provides authentication and authorization primitives for using on the server side.
-+ `jwt` - provides parser for JSON Web Tokens (JWT).
-+ `jwks` - provides a client for fetching and caching JSON Web Key Sets (JWKS).
-+ `idptoken` - provides a client for fetching and caching Access Tokens from Identity Providers (IDP).
-+ `idptest` - provides primitives for testing IDP clients.
+## Features 
 
-## Examples
+- Authenticate HTTP requests with JWT tokens via middleware that can be configured via YAML/JSON file or environment variables.
+- Authorize HTTP requests with JWT tokens by verifying access based on the roles in the JWT claims.
+- Fetch and cache JSON Web Key Sets (JWKS) from Identity Providers (IDP).
+- Introspect Access Tokens via the OAuth 2.0 Token Introspection endpoint.
+- Fetch and cache Access Tokens from Identity Providers (IDP).
+- Provides primitives for testing authentication and authorization in HTTP services.
 
-### Authenticating requests with JWT tokens
+## Authenticate HTTP requests with JWT tokens
 
-The `JWTAuthMiddleware` function creates a middleware that authenticates requests with JWT tokens.
+`JWTAuthMiddleware()` creates a middleware that authenticates requests with JWT tokens and puts the parsed JWT claims (`jwt.Claims`) into the request context.
 
-It uses the `JWTParser` to parse and validate JWT.
-`JWTParser` can verify JWT tokens signed with RSA (RS256, RS384, RS512) algorithms for now.
-It performs <issuer_url>/.well-known/openid-configuration request to get the JWKS URL ("jwks_uri" field) and fetches JWKS from there.
-For other algorithms `jwt.SignAlgUnknownError` error will be returned.
-The `JWTParser` can be created with the `NewJWTParser` function or with the `NewJWTParserWithCachingJWKS` function.
-The last one is recommended for production use because it caches public keys (JWKS) that are used for verifying JWT tokens.
-
-See `Config` struct for more customization options.
-
-Example:
+`jwt.Claims` is an extension of the `RegisteredClaims` struct from the `github.com/golang-jwt/jwt/v5` package.
+It contains additional fields, one of which is `Scope` that represents a list of access policies.
+They are used for authorization in the typical Acronis service,
+and actually can be used in any other application that performs multi-tenant authorization.
 
 ```go
-package main
+package jwt
 
 import (
-	"net/http"
-
-	"github.com/acronis/go-appkit/log"
-	"github.com/acronis/go-authkit"
+	jwtgo "github.com/golang-jwt/jwt/v5"
 )
 
-func main() {
-	jwtConfig := auth.JWTConfig{
-		TrustedIssuerURLs: []string{"https://my-idp.com"},
-		//TrustedIssuers: map[string]string{"my-idp": "https://my-idp.com"}, // Use TrustedIssuers if you have a custom issuer name.
-	}
-	jwtParser, _ := auth.NewJWTParserWithCachingJWKS(&auth.Config{JWT: jwtConfig}, log.NewDisabledLogger())
-	authN := auth.JWTAuthMiddleware("MyService", jwtParser)
+type Claims struct {
+    jwtgo.RegisteredClaims
+    Scope []AccessPolicy `json:"scope,omitempty"`
+	// ...
+}
 
-	srvMux := http.NewServeMux()
-	srvMux.Handle("/", http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		_, _ = rw.Write([]byte("Hello, World!"))
-	}))
-	srvMux.Handle("/admin", authN(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		//jwtClaims := GetJWTClaimsFromContext(r.Context()) // GetJWTClaimsFromContext is a helper function to get JWT claims from context.
-		_, _ = rw.Write([]byte("Hello, admin!"))
-	})))
-	
-	_ = http.ListenAndServe(":8080", srvMux)
-}	
-```
+// AccessPolicy represents a single access policy which specifies access rights to a tenant or resource
+// in the scope of a resource server.
+type AccessPolicy struct {
+	// TenantID is a unique identifier of tenant for which access is granted (if resource is not specified)
+	// or which the resource is owned by (if resource is specified).
+	TenantID string `json:"tid,omitempty"`
 
-```shell
-$ curl -w "\nHTTP code: %{http_code}\n" localhost:8080
-Hello, World!
-HTTP code: 200
+	// TenantUUID is a UUID of tenant for which access is granted (if the resource is not specified)
+	// or which the resource is owned by (if the resource is specified).
+	TenantUUID string `json:"tuid,omitempty"`
 
-$ curl -w "\nHTTP code: %{http_code}\n" localhost:8080/admin
-{"error":{"domain":"MyService","code":"bearerTokenMissing","message":"Authorization bearer token is missing."}}
-HTTP code: 401
-```
+	// ResourceServerID is a unique resource server instance or cluster ID.
+	ResourceServerID string `json:"rs,omitempty"`
 
-### Authorizing requests with JWT tokens
+	// ResourceNamespace is a namespace to which resource belongs within resource server.
+	// E.g.: account-server, storage-manager, task-manager, alert-manager, etc.
+	ResourceNamespace string `json:"rn,omitempty"`
 
-```go
-package main
+	// ResourcePath is a unique identifier of or path to a single resource or resource collection
+	// in the scope of the resource server and namespace.
+	ResourcePath string `json:"rp,omitempty"`
 
-import (
-	"net/http"
-
-	"github.com/acronis/go-appkit/log"
-	"github.com/acronis/go-authkit"
-)
-
-func main() {
-	jwtConfig := auth.JWTConfig{TrustedIssuers: map[string]string{"my-idp": idpURL}}
-	jwtParser, _ := auth.NewJWTParserWithCachingJWKS(&auth.Config{JWT: jwtConfig}, log.NewDisabledLogger())
-	authOnlyAdmin := auth.JWTAuthMiddlewareWithVerifyAccess("MyService", jwtParser,
-		auth.NewVerifyAccessByRolesInJWT(Role{Namespace: "my-service", Name: "admin"}))
-
-	srvMux := http.NewServeMux()
-	srvMux.Handle("/", http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		_, _ = rw.Write([]byte("Hello, World!"))
-	}))
-	srvMux.Handle("/admin", authOnlyAdmin(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		_, _ = rw.Write([]byte("Hello, admin!"))
-	})))
-	
-	_ = http.ListenAndServe(":8080", srvMux)
+	// Role determines what actions are allowed to be performed on the specified tenant or resource.
+	Role string `json:"role,omitempty"`
 }
 ```
 
-Please see [example_test.go](./example_test.go) for a full version of the example.
+`JWTAuthMiddleware()` function accepts two mandatory arguments: `errorDomain` and `JWTParser`.
+
+The `errorDomain` is usually the name of the service that uses the middleware, and it's goal is distinguishing errors from different services.
+It helps to understand where the error occurred and what service caused it. For example, if the "Authorization" HTTP header is missing, the middleware will return 401 with the following response body:
+```json
+{
+  "error": {
+    "domain": "MyService",
+    "code": "bearerTokenMissing",
+    "message": "Authorization bearer token is missing."
+  }
+}
+```
+
+`JWTParser` is used to parse and validate JWT tokens.
+It can be constructed with the `NewJWTParser` right from the YAML/JSON configuration or with the specific `jwt.NewParser()`/`jwt.NewCachingParser()` functions (both of them are used in the `NewJWTParser()` under the hood depending on the configuration).
+`jwt.CachingParser` uses LRU in-memory cache for the JWT claims (`jwt.Claims`) to avoid parsing and validating the same token multiple times that can be useful when JWT tokens are large and the service gets a lot of requests from the same client.
+`NewJWTParser()` uses `jwks.CachingClient` for fetching and caching JWKS (JSON Web Key Set) that is used for verifying JWT tokens.
+This client performs <issuer_url>/.well-known/openid-configuration request to get the JWKS URL ("jwks_uri" field) and fetches JWKS from there.
+Issuer should be presented in the trusted list, otherwise the middleware will return HTTP response with 401 status code and log a corresponding error message.
+
+### Authentication middleware example
+
+Example of the HTTP middleware that authenticates requests with JWT tokens can be found [here](./examples/authn-middleware).
+
+## Introspect Access Tokens via the OAuth 2.0 Token Introspection endpoint
+
+Introspection is the process of determining the active state of an access token and the associated metadata.
+More information can be found in the [RFC 7662](https://tools.ietf.org/html/rfc7662).
+
+go-authkit provides a way to introspect any kind of access tokens, not only JWT tokens, via the OAuth 2.0 Token Introspection endpoint.
+It performs unmarsalling of the response from the endpoint to the `idptoken.IntrospectionResult` struct which contains the `Active` field that indicates whether the token is active or not.
+Additionally, it contains the `TokenType` field that specifies the type of the token and the `Claims` field for presenting the token's metadata in the form of JWT claims.
+
+```go
+package idptoken
+
+import (
+	"github.com/acronis/go-authkit/jwt"
+)
+
+type IntrospectionResult struct {
+    Active    bool   `json:"active"`
+    TokenType string `json:"token_type,omitempty"`
+    jwt.Claims
+}
+```
+
+The Token Introspection endpoint may be configured statically or obtained from the OpenID Connect Discovery response (GET /.well-known/openid-configuration request for the issuer URL).
+In the case of the static configuration, gRPC could be used instead of HTTP for the introspection request (see [idp_token.proto](./idptoken/idp_token.proto) for details).
+
+`NewTokenIntrospector()` function creates an introspector that can be used to introspect access tokens.
+
+It's a good practice to protect the introspection endpoint itself.
+That's why `NewTokenIntrospector()` accepts the Token Provider (`TokenProvider` interface) that is used to get the Access Token (usually from the Identity Provider) to perform the introspection request with it.
+Please keep in mind that the Token Provider should return a valid Access Token that has the necessary permissions to perform the introspection request.
+
+Additionally, the `NewTokenIntrospector()` accepts the scope filter for filtering out the unnecessary claims from the introspection response.
+
+### Introspection example
+
+Example of the access token introspection during the HTTP request authentication can be found [here](./examples/token-introspection).
 
 ### Fetching and caching Access Tokens from Identity Providers
 
@@ -122,7 +146,7 @@ func main() {
 		ClientSecret: clientSecret,
 	}
 	provider := idptoken.NewProvider(httpClient, source)
-	accessToken, err := provider.GetToken()
+	accessToken, err := provider.GetToken(ctx)
 	if err != nil {
 		log.Fatalf("failed to get access token: %v", err)
     }

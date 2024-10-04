@@ -50,25 +50,27 @@ func (m *HTTPServerTokenIntrospectorMock) SetScopeForJWTID(jwtID string, scope [
 	m.jwtScopes[jwtID] = scope
 }
 
-func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(r *http.Request, token string) idptoken.IntrospectionResult {
+func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
+	r *http.Request, token string,
+) (idptoken.IntrospectionResult, error) {
 	m.Called = true
 	m.LastAuthorizationHeader = r.Header.Get("Authorization")
 	m.LastIntrospectedToken = token
 	m.LastFormValues = r.Form
 
 	if result, ok := m.introspectionResults[tokenToKey(token)]; ok {
-		return result
+		return result, nil
 	}
 
 	claims, err := m.JWTParser.Parse(r.Context(), token)
 	if err != nil {
-		return idptoken.IntrospectionResult{Active: false}
+		return idptoken.IntrospectionResult{Active: false}, nil
 	}
 	result := idptoken.IntrospectionResult{Active: true, TokenType: idptoken.TokenTypeBearer, Claims: *claims}
 	if scopes, ok := m.jwtScopes[claims.ID]; ok {
 		result.Scope = scopes
 	}
-	return result
+	return result, nil
 }
 
 func (m *HTTPServerTokenIntrospectorMock) ResetCallsInfo() {

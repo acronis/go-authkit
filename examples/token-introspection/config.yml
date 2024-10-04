@@ -1,0 +1,21 @@
+log:
+  level: info
+  format: json
+  output: stdout
+auth:
+  jwt:
+    trustedIssuerUrls:
+      - http://127.0.0.1:8081
+    claimsCache:
+      enabled: true
+      maxEntries: 1000
+  introspection:
+    enabled: true
+    claimsCache: # claims cache is used to cache introspection results for tokens that are valid
+      enabled: true
+      maxEntries: 1000
+      ttl: 1m
+    negativeCache: # negative cache is used to cache introspection results for tokens that are not valid (e.g. expired)
+      enabled: true
+      maxEntries: 1000
+      ttl: 5m
