@@ -4,7 +4,7 @@ Copyright © 2024 Acronis International GmbH.
 Released under MIT license.
 */
 
-package auth
+package authkit
 
 import (
 	"context"
@@ -94,6 +94,12 @@ func WithJWTAuthMiddlewareTokenIntrospector(tokenIntrospector TokenIntrospector)
 
 // JWTAuthMiddleware is a middleware that does authentication
 // by Access Token from the "Authorization" HTTP header of incoming request.
+// errorDomain is used for error responses. It is usually the name of the service that uses the middleware,
+// and its goal is distinguishing errors from different services.
+// It helps to understand where the error occurred and what service caused it.
+// For example, if the "Authorization" HTTP header is missing, the middleware will return 401 with the following response body:
+//
+//	{"error": {"domain": "MyService", "code": "bearerTokenMissing", "message": "Authorization bearer token is missing."}}
 func JWTAuthMiddleware(errorDomain string, jwtParser JWTParser, opts ...JWTAuthMiddlewareOption) func(next http.Handler) http.Handler {
 	var options jwtAuthMiddlewareOpts
 	for _, opt := range opts {
