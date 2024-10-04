@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/acronis/go-appkit/log"
@@ -48,7 +49,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
 		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, openIDCfgErr.URL)
-		require.ErrorContains(t, openIDCfgErr.Inner, "connection refused")
+		requireLocalhostConnRefusedError(t, openIDCfgErr.Inner)
 		require.Nil(t, pubKey)
 	})
 
@@ -99,7 +100,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.True(t, errors.As(err, &jwksErr))
 		require.Equal(t, jwksServer.URL, jwksErr.URL)
 		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, jwksErr.OpenIDConfigurationURL)
-		require.ErrorContains(t, jwksErr.Inner, "connection refused")
+		requireLocalhostConnRefusedError(t, jwksErr.Inner)
 		require.Nil(t, pubKey)
 	})
 
@@ -157,4 +158,11 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.ErrorIs(t, openIDCfgErr, context.Canceled)
 		require.Nil(t, pubKey)
 	})
+}
+
+func requireLocalhostConnRefusedError(t *testing.T, err error) {
+	t.Helper()
+	require.True(t,
+		strings.Contains(err.Error(), "dial tcp 127.0.0.1:") && strings.Contains(err.Error(), "refused"),
+		`Error %q doesn't contain "dial tcp 127.0.0.1 ... refused"`, err)
 }
