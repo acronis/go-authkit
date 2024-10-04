@@ -181,42 +181,30 @@ type Claims struct {
 	OwnerTenantUUID string         `json:"owner_tuid,omitempty"`
 }
 
-// AccessPolicy represents a single access policy.
+// AccessPolicy represents a single access policy which specifies access rights to a tenant or resource
+// in the scope of a resource server.
 type AccessPolicy struct {
-	// TenantID equals to tenant ID for which access is granted (if resource is not specified)
-	// or which resource is owned by (if resource is specified).
-	// max length is 36 characters (uuid)
+	// TenantID is a unique identifier of tenant for which access is granted (if resource is not specified)
+	// or which the resource is owned by (if resource is specified).
 	TenantID string `json:"tid,omitempty"`
 
-	// TenantUUID equals to tenant UUID for which access is granted (if resource is not specified)
-	// or which resource is owned by (if resource is specified).
-	// max length is 36 characters (uuid)
+	// TenantUUID is a UUID of tenant for which access is granted (if the resource is not specified)
+	// or which the resource is owned by (if the resource is specified).
 	TenantUUID string `json:"tuid,omitempty"`
 
-	// ResourceServerID must be unique resource server instance or cluster ID.
-	// max length is 36 characters [a-Z0-9-_]
+	// ResourceServerID is a unique resource server instance or cluster ID.
 	ResourceServerID string `json:"rs,omitempty"`
 
-	// ResourceNamespace AKA resource type, partitions resources within resource server.
-	// E.g.: storage, task-manager, account-server, resource-manager, policy-manager etc.
-	// max length is 36 characters [a-Z0-9-_]
+	// ResourceNamespace is a namespace to which resource belongs within resource server.
+	// E.g.: account-server, storage-manager, task-manager, alert-manager, etc.
 	ResourceNamespace string `json:"rn,omitempty"`
 
-	// ResourcePath AKA resource ID AKA resource pointer, is a unique identifier of
-	// or path to (in scope of resource server and namespace) a single resource or resource collection
-	// 		'path' notion remind that it can contain segments, each meaningfull to resource server
-	// 			i.e. each sub-path can correspond to different resources, and access policies can be assigned with any sub-path granularity
-	// 			but resource path will be considered as immutable,
-	//			moving resources 'within' the path will break access control logic on both AuthZ server and resource server sides
-	// 		e.g: vms, vm1, queues, queue1
-	// max length is 255 characters [a-Z0-9-_]
+	// ResourcePath is a unique identifier of or path to a single resource or resource collection
+	// in the scope of the resource server and namespace.
 	ResourcePath string `json:"rp,omitempty"`
 
-	// Role - role available for the resource specified by resource id
+	// Role determines what actions are allowed to be performed on the specified tenant or resource.
 	Role string `json:"role,omitempty"`
-
-	AllowPermissions []string `json:"allow,omitempty"`
-	DenyPermissions  []string `json:"deny,omitempty"`
 }
 
 type validatableClaims struct {

@@ -437,7 +437,7 @@ type claimsProviderWithExpiration struct {
 	ExpTime time.Duration
 }
 
-func (d *claimsProviderWithExpiration) Provide(_ *http.Request) jwt.Claims {
+func (d *claimsProviderWithExpiration) Provide(_ *http.Request) (jwt.Claims, error) {
 	claims := jwt.Claims{
 		// nolint:staticcheck // StandardClaims are used here for test purposes
 		RegisteredClaims: jwtgo.RegisteredClaims{
@@ -460,5 +460,5 @@ func (d *claimsProviderWithExpiration) Provide(_ *http.Request) jwt.Claims {
 	}
 	claims.ExpiresAt = jwtgo.NewNumericDate(time.Now().UTC().Add(d.ExpTime))
 
-	return claims
+	return claims, nil
 }

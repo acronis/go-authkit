@@ -7,6 +7,7 @@ Released under MIT license.
 package idptest
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -28,14 +29,16 @@ const (
 
 const localhostWithDynamicPortAddr = "127.0.0.1:0"
 
+var ErrUnauthorized = errors.New("unauthorized")
+
 // HTTPClaimsProvider is an interface for providing JWT claims in HTTP handlers.
 type HTTPClaimsProvider interface {
-	Provide(r *http.Request) jwt.Claims
+	Provide(r *http.Request) (jwt.Claims, error)
 }
 
 // HTTPTokenIntrospector is an interface for introspecting tokens.
 type HTTPTokenIntrospector interface {
-	IntrospectToken(r *http.Request, token string) idptoken.IntrospectionResult
+	IntrospectToken(r *http.Request, token string) (idptoken.IntrospectionResult, error)
 }
 
 type HTTPServerOption func(s *HTTPServer)
@@ -100,10 +103,17 @@ func WithHTTPTokenIntrospector(introspector HTTPTokenIntrospector) HTTPServerOpt
 	}
 }
 
+func WithHTTPMiddleware(mw func(http.Handler) http.Handler) HTTPServerOption {
+	return func(s *HTTPServer) {
+		s.middleware = mw
+	}
+}
+
 // HTTPServer is a mock IDP server for testing purposes.
 type HTTPServer struct {
 	*http.Server
 	addr                       atomic.Value
+	middleware                 func(http.Handler) http.Handler
 	KeysHandler                http.Handler
 	TokenHandler               http.Handler
 	TokenIntrospectionHandler  http.Handler
@@ -137,6 +147,9 @@ func NewHTTPServer(options ...HTTPServerOption) *HTTPServer {
 
 	// nolint:gosec // This server is used for testing purposes only.
 	s.Server = &http.Server{Handler: s.Router}
+	if s.middleware != nil {
+		s.Server.Handler = s.middleware(s.Router)
+	}
 
 	return s
 }

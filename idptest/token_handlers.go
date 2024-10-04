@@ -8,6 +8,7 @@ package idptest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -33,7 +34,15 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := h.ClaimsProvider.Provide(r)
+	claims, err := h.ClaimsProvider.Provide(r)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	token, err := MakeTokenStringWithHeader(claims, TestKeyID, GetTestRSAPrivateKey(), nil)
 	if err != nil {
@@ -88,7 +97,15 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 		http.Error(rw, "Token is required", http.StatusBadRequest)
 		return
 	}
-	introspectResult := h.TokenIntrospector.IntrospectToken(r, token)
+	introspectResult, err := h.TokenIntrospector.IntrospectToken(r, token)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	rw.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(rw).Encode(introspectResult); err != nil {
