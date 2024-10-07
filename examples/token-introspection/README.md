@@ -73,3 +73,36 @@ Service logs:
 ```
 {"level":"info","time":"2024-10-07T10:48:24.885616+03:00","msg":"response completed in 0.003s","pid":84516,"request_id":"","int_request_id":"","trace_id":"","method":"GET","uri":"/admin","remote_addr":"127.0.0.1:51527","content_length":0,"user_agent":"curl/8.7.1","remote_addr_ip":"127.0.0.1","remote_addr_port":51527,"duration_ms":2,"duration":2866,"status":200,"bytes_sent":10}
 ```
+
+## Static HTTP and gRPC introspection endpoint configuration
+
+By default, the introspection endpoint is obtained from the OpenID Connect Discovery response. The library will use the endpoint specified in the `introspection_endpoint` field in the <issuer_url>/.well-known/openid-configuration response body.
+But it can be configured statically as well. It could be useful in multiple cases:
+- When the introspection endpoint is not supported by the IDP.
+- Not JWT token is used for authentication (e.g., opaque token).
+- When we want to have a single point of introspection for all tokens.
+- When performance is critical, and we want to use persistent gRPC connection.
+
+To configure the static introspection endpoint, add the following configuration to the `config.yaml` file:
+
+```yaml
+introspection:
+  endpoint: <static_http_url>
+```
+
+Additionally, the introspection can be configured to use gRPC instead of HTTP for the introspection request.
+If `grps.tls.enabled` is set to `true`, the introspection request will be made over a secure connection.
+If `grps.tls.client_cert` and `grps.tls.client_key` are set, the introspection request will be made with client authentication (mutual TLS).
+
+```yaml
+introspection:
+  grpc:
+    target: <static_grpc_url>
+    tls:
+      enabled: true
+      caCert: <path_to_ca_cert>
+      clientCert: <path_to_client_cert>
+      clientKey: <path_to_client_key>
+```
+
+Static endpoint configuration has higher priority than the dynamic one.
