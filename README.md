@@ -5,7 +5,7 @@
 - Authenticate HTTP requests with JWT tokens via middleware that can be configured via YAML/JSON file or environment variables.
 - Authorize HTTP requests with JWT tokens by verifying access based on the roles in the JWT claims.
 - Fetch and cache JSON Web Key Sets (JWKS) from Identity Providers (IDP).
-- Introspect Access Tokens via the OAuth 2.0 Token Introspection endpoint.
+- Introspect Access Tokens via OAuth 2.0 Token Introspection endpoint.
 - Fetch and cache Access Tokens from Identity Providers (IDP).
 - Provides primitives for testing authentication and authorization in HTTP services.
 
@@ -26,8 +26,8 @@ import (
 )
 
 type Claims struct {
-    jwtgo.RegisteredClaims
-    Scope []AccessPolicy `json:"scope,omitempty"`
+	jwtgo.RegisteredClaims
+	Scope []AccessPolicy `json:"scope,omitempty"`
 	// ...
 }
 
@@ -100,14 +100,14 @@ import (
 )
 
 type IntrospectionResult struct {
-    Active    bool   `json:"active"`
-    TokenType string `json:"token_type,omitempty"`
-    jwt.Claims
+	Active    bool   `json:"active"`
+	TokenType string `json:"token_type,omitempty"`
+	jwt.Claims
 }
 ```
 
 The Token Introspection endpoint may be configured statically or obtained from the OpenID Connect Discovery response (GET /.well-known/openid-configuration request for the issuer URL).
-In the case of the static configuration, gRPC could be used instead of HTTP for the introspection request (see [idp_token.proto](./idptoken/idp_token.proto) for details).
+In case of the static configuration, gRPC could be used instead of HTTP for the introspection request (see [idp_token.proto](./idptoken/idp_token.proto) for details).
 
 `NewTokenIntrospector()` function creates an introspector that can be used to introspect access tokens.
 
@@ -149,7 +149,7 @@ func main() {
 	accessToken, err := provider.GetToken(ctx)
 	if err != nil {
 		log.Fatalf("failed to get access token: %v", err)
-    }
+	}
 	// ...
 }
 ```
