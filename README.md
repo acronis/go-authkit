@@ -1,4 +1,4 @@
-# Toolkit for simplifying authentication and authorization in Go services
+# Toolkit for authentication and authorization in Go services
 
 ## Features 
 
