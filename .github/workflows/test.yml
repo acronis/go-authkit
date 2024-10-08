@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  test_and_lint:
-    name: Test, Lint, and Coverage
+  test:
+    name: Test
     strategy:
       matrix:
         go: [ '1.20' ]
