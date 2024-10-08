@@ -35,13 +35,20 @@ jobs:
         run: go mod download
 
       - name: Run tests with coverage
-        run: go test -race -cover -coverprofile="coverage.out" -covermode=atomic -v ./...
+        run: go test -race -cover -coverprofile="coverage.out" -covermode=atomic -v --coverpkg=./... ./...
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage.out
+      - name: Exclude generated code and examples from coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: grep -Ev '/pb/|/examples/' ./coverage.out > ./coverage_filtered.out && mv -f ./coverage_filtered.out ./coverage.out
 
-      - name: Calculate coverage
-        run: go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}'
-        id: coverage
+      - name: Check coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          real_coverage=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          min_coverage=$(cat min-coverage.txt)
+          if (( $(echo "$real_coverage < $min_coverage" | bc -l) )); then
+            echo "Coverage check failed: $real_coverage% is lower than the required $min_coverage%"
+            exit 1
+          else
+            echo "Coverage check passed: $real_coverage% meets the minimum requirement of $min_coverage%"
+          fi
