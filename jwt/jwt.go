@@ -69,8 +69,12 @@ func NewParserWithOpts(keysProvider KeysProvider, logger log.FieldLogger, opts P
 	for _, audPattern := range opts.ExpectedAudience {
 		audienceMatchers = append(audienceMatchers, glob.Compile(audPattern))
 	}
+	parserOpts := []jwtgo.ParserOption{jwtgo.WithExpirationRequired()}
+	if opts.SkipClaimsValidation {
+		parserOpts = append(parserOpts, jwtgo.WithoutClaimsValidation())
+	}
 	return &Parser{
-		parser:                        jwtgo.NewParser(jwtgo.WithExpirationRequired()),
+		parser:                        jwtgo.NewParser(parserOpts...),
 		claimsValidator:               jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
 		customValidator:               makeCustomAudienceValidator(opts.RequireAudience, audienceMatchers),
 		skipClaimsValidation:          opts.SkipClaimsValidation,
