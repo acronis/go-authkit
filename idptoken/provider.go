@@ -161,27 +161,40 @@ type MultiSourceProvider struct {
 	nextRefresh   time.Time
 }
 
-// NewMultiSourceProviderWithOpts returns a new instance of MultiSourceProvider with custom settings
-func NewMultiSourceProviderWithOpts(
-	httpClient *http.Client, opts ProviderOpts, sources ...Source,
-) *MultiSourceProvider {
-	p := MultiSourceProvider{}
-
-	if opts.Logger == nil {
-		opts.Logger = log.NewDisabledLogger()
-	}
-
-	if opts.MinRefreshPeriod == 0 {
-		opts.MinRefreshPeriod = defaultMinRefreshPeriod
-	}
-
-	p.init(httpClient, opts, sources...)
-	return &p
+// NewMultiSourceProvider returns a new instance of MultiSourceProvider with default settings
+func NewMultiSourceProvider(sources []Source) *MultiSourceProvider {
+	return NewMultiSourceProviderWithOpts(sources, ProviderOpts{})
 }
 
-// NewMultiSourceProvider returns a new instance of MultiSourceProvider with default settings
-func NewMultiSourceProvider(httpClient *http.Client) *MultiSourceProvider {
-	return NewMultiSourceProviderWithOpts(httpClient, ProviderOpts{})
+// NewMultiSourceProviderWithOpts returns a new instance of MultiSourceProvider with custom settings
+func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiSourceProvider {
+	p := MultiSourceProvider{
+		rescheduleSignal: make(chan struct{}, 1),
+		nextRefresh:      zeroTime,
+		minRefreshPeriod: opts.MinRefreshPeriod,
+		logger:           idputil.PrepareLogger(opts.Logger),
+		tokenIssuers:     make(map[string]*oauth2Issuer),
+		promMetrics:      metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "token_provider"),
+		customHeaders:    opts.CustomHeaders,
+		cache:            opts.CustomCacheInstance,
+		httpClient:       opts.HTTPClient,
+	}
+
+	if p.minRefreshPeriod == 0 {
+		p.minRefreshPeriod = defaultMinRefreshPeriod
+	}
+	if p.cache == nil {
+		p.cache = NewInMemoryTokenCache()
+	}
+	if p.httpClient == nil {
+		p.httpClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, p.logger)
+	}
+
+	for _, source := range sources {
+		p.RegisterSource(source)
+	}
+
+	return &p
 }
 
 // RegisterSource allows registering a new Source into MultiSourceProvider
@@ -240,25 +253,22 @@ func (p *MultiSourceProvider) issueToken(
 	}
 
 	_, errEns, _ := p.sfGroup.Do(keyForIssuer(clientID, sourceURL), func() (interface{}, error) {
-		return nil, issuer.EnsureIssuerURL(ctx, headers)
+		return nil, issuer.ensureTokenURL(ctx, headers)
 	})
-
 	if errEns != nil {
 		p.logger.Error(fmt.Sprintf("(%s, %s): ensure issuer URL", sourceURL, clientID), log.Error(errEns))
 		return TokenData{}, errEns
 	}
 
 	sortedScope := uniqAndSort(scope)
-	key := keyForCache(clientID, issuer.loadIssuerURL(), sortedScope)
-
+	key := keyForCache(clientID, issuer.loadTokenURL(), sortedScope)
 	token, err, _ := p.sfGroup.Do(key, func() (interface{}, error) {
-		result, issErr := issuer.IssueToken(ctx, headers, sortedScope)
+		result, issErr := issuer.issueToken(ctx, headers, sortedScope)
 		p.cacheToken(result, sourceURL)
 		return result, issErr
 	})
-
 	if err != nil {
-		p.logger.Error(fmt.Sprintf("(%s, %s): issuing token", issuer.loadIssuerURL(), clientID), log.Error(err))
+		p.logger.Error(fmt.Sprintf("(%s, %s): issuing token", issuer.loadTokenURL(), clientID), log.Error(err))
 		return TokenData{}, err
 	}
 
@@ -324,11 +334,11 @@ func (p *MultiSourceProvider) getCachedOrInvalidate(clientID, sourceURL string, 
 	if !found {
 		return TokenData{}, fmt.Errorf("(%s, %s): not registered", sourceURL, clientID)
 	}
-	if issuer.loadIssuerURL() == "" {
+	if issuer.loadTokenURL() == "" {
 		return TokenData{}, fmt.Errorf("(%s, %s): issuer URL not acquired", sourceURL, clientID)
 	}
 
-	key := keyForCache(clientID, issuer.loadIssuerURL(), uniqAndSort(scope))
+	key := keyForCache(clientID, issuer.loadTokenURL(), uniqAndSort(scope))
 	details := p.cache.Get(key)
 	if details == nil {
 		return TokenData{}, errors.New("token not found in cache")
@@ -456,28 +466,6 @@ func (p *MultiSourceProvider) refreshLoop(ctx context.Context) {
 	}
 }
 
-func (p *MultiSourceProvider) init(httpClient *http.Client, opts ProviderOpts, sources ...Source) {
-	if httpClient == nil {
-		panic("httpClient is mandatory")
-	}
-	p.cache = opts.CustomCacheInstance
-	if p.cache == nil {
-		p.cache = NewInMemoryTokenCache()
-	}
-	p.rescheduleSignal = make(chan struct{}, 1)
-	p.nextRefresh = zeroTime
-	p.minRefreshPeriod = opts.MinRefreshPeriod
-	p.logger = opts.Logger
-	p.httpClient = httpClient
-	p.tokenIssuers = make(map[string]*oauth2Issuer)
-	p.promMetrics = metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "token_provider")
-	p.customHeaders = opts.CustomHeaders
-
-	for _, source := range sources {
-		p.RegisterSource(source)
-	}
-}
-
 // Provider is a caching token provider for a single credentials set
 type Provider struct {
 	provider *MultiSourceProvider
@@ -485,15 +473,15 @@ type Provider struct {
 }
 
 // NewProvider returns a new instance of Provider
-func NewProvider(httpClient *http.Client, source Source) *Provider {
-	return NewProviderWithOpts(httpClient, ProviderOpts{}, source)
+func NewProvider(source Source) *Provider {
+	return NewProviderWithOpts(source, ProviderOpts{})
 }
 
 // NewProviderWithOpts returns a new instance of Provider with custom options
-func NewProviderWithOpts(httpClient *http.Client, opts ProviderOpts, source Source) *Provider {
+func NewProviderWithOpts(source Source, opts ProviderOpts) *Provider {
 	mp := Provider{
 		source:   source,
-		provider: NewMultiSourceProviderWithOpts(httpClient, opts, source),
+		provider: NewMultiSourceProviderWithOpts([]Source{source}, opts),
 	}
 	return &mp
 }
@@ -527,7 +515,7 @@ type oauth2Issuer struct {
 	clientSecret string
 	httpClient   *http.Client
 	logger       log.FieldLogger
-	issuerURL    atomic.Value
+	tokenURL     atomic.Value
 	promMetrics  *metrics.PrometheusMetrics
 }
 
@@ -542,15 +530,15 @@ func (p *MultiSourceProvider) newOAuth2Issuer(baseURL, clientID, clientSecret st
 	}
 }
 
-func (ti *oauth2Issuer) loadIssuerURL() string {
-	if v := ti.issuerURL.Load(); v != nil {
+func (ti *oauth2Issuer) loadTokenURL() string {
+	if v := ti.tokenURL.Load(); v != nil {
 		return v.(string)
 	}
 	return ""
 }
 
-func (ti *oauth2Issuer) EnsureIssuerURL(ctx context.Context, customHeaders map[string]string) error {
-	if ti.loadIssuerURL() != "" {
+func (ti *oauth2Issuer) ensureTokenURL(ctx context.Context, customHeaders map[string]string) error {
+	if ti.loadTokenURL() != "" {
 		return nil
 	}
 
@@ -565,16 +553,16 @@ func (ti *oauth2Issuer) EnsureIssuerURL(ctx context.Context, customHeaders map[s
 		return fmt.Errorf("(%s, %s): issuer have returned a non-valid URL %q: %w",
 			ti.baseURL, ti.clientID, openIDCfg.TokenURL, err)
 	}
-	ti.issuerURL.Store(openIDCfg.TokenURL)
+	ti.tokenURL.Store(openIDCfg.TokenURL)
 	return nil
 }
 
-func (ti *oauth2Issuer) IssueToken(
+func (ti *oauth2Issuer) issueToken(
 	ctx context.Context, customHeaders map[string]string, scope []string,
 ) (TokenData, error) {
-	issuerURL := ti.loadIssuerURL()
-	if issuerURL == "" {
-		panic("must first ensure issuerURL")
+	tokenURL := ti.loadTokenURL()
+	if tokenURL == "" {
+		return TokenData{}, fmt.Errorf("token URL is empty")
 	}
 	values := url.Values{}
 	values.Add("grant_type", "client_credentials")
@@ -582,7 +570,7 @@ func (ti *oauth2Issuer) IssueToken(
 	if scopeStr != "" {
 		values.Add("scope", scopeStr)
 	}
-	req, reqErr := http.NewRequest(http.MethodPost, issuerURL, strings.NewReader(values.Encode()))
+	req, reqErr := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(values.Encode()))
 	if reqErr != nil {
 		return TokenData{}, reqErr
 	}
@@ -598,13 +586,13 @@ func (ti *oauth2Issuer) IssueToken(
 	elapsed := time.Since(start)
 
 	if err != nil {
-		ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, issuerURL, 0, elapsed, metrics.HTTPRequestErrorDo)
+		ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, tokenURL, 0, elapsed, metrics.HTTPRequestErrorDo)
 		return TokenData{}, fmt.Errorf("do http request: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			ti.logger.Error(
-				fmt.Sprintf("(%s, %s): closing body", ti.loadIssuerURL(), ti.clientID), log.Error(err),
+				fmt.Sprintf("(%s, %s): closing body", ti.loadTokenURL(), ti.clientID), log.Error(err),
 			)
 		}
 	}()
@@ -612,26 +600,26 @@ func (ti *oauth2Issuer) IssueToken(
 	tokenResponse := tokenResponseBody{}
 	if err = json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
 		ti.promMetrics.ObserveHTTPClientRequest(
-			http.MethodPost, issuerURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorDecodeBody)
+			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorDecodeBody)
 		return TokenData{}, fmt.Errorf(
-			"(%s, %s): read and unmarshal IDP response: %w", ti.loadIssuerURL(), ti.clientID, err,
+			"(%s, %s): read and unmarshal IDP response: %w", ti.loadTokenURL(), ti.clientID, err,
 		)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		ti.promMetrics.ObserveHTTPClientRequest(
-			http.MethodPost, issuerURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
-		return TokenData{}, &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadIssuerURL()}
+			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
+		return TokenData{}, &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadTokenURL()}
 	}
 
-	ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, issuerURL, resp.StatusCode, elapsed, "")
+	ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, tokenURL, resp.StatusCode, elapsed, "")
 	expires := time.Now().Add(time.Second * time.Duration(tokenResponse.ExpiresIn))
-	ti.logger.Infof("(%s, %s): issued token, expires on %s", ti.loadIssuerURL(), ti.clientID, expires.UTC())
+	ti.logger.Infof("(%s, %s): issued token, expires on %s", ti.loadTokenURL(), ti.clientID, expires.UTC())
 	return TokenData{
 		Data:     tokenResponse.AccessToken,
 		Scope:    scope,
 		Expires:  expires,
-		issueURL: ti.loadIssuerURL(),
+		issueURL: ti.loadTokenURL(),
 		ClientID: ti.clientID,
 	}, nil
 }
@@ -640,6 +628,9 @@ func (ti *oauth2Issuer) IssueToken(
 type ProviderOpts struct {
 	// Logger is a logger for MultiSourceProvider.
 	Logger log.FieldLogger
+
+	// HTTPClient is an HTTP client for MultiSourceProvider.
+	HTTPClient *http.Client
 
 	// MinRefreshPeriod is a minimal possible refresh interval for MultiSourceProvider's token cache.
 	MinRefreshPeriod time.Duration

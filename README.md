@@ -1,5 +1,11 @@
 # Toolkit for authentication and authorization in Go services
 
+## Installation
+
+```
+go get -u github.com/acronis/go-authkit
+```
+
 ## Features 
 
 - Authenticate HTTP requests with JWT tokens via middleware that can be configured via YAML/JSON file or environment variables.

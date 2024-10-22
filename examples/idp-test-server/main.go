@@ -33,7 +33,8 @@ func runApp() error {
 	logger, loggerClose := log.NewLogger(&log.Config{Output: log.OutputStdout, Level: log.LevelInfo, Format: log.FormatJSON})
 	defer loggerClose()
 
-	jwtParser := jwt.NewParser(jwks.NewCachingClient(&http.Client{Timeout: time.Second * 30}, logger), logger)
+	jwksClientOpts := jwks.CachingClientOpts{ClientOpts: jwks.ClientOpts{Logger: logger}}
+	jwtParser := jwt.NewParser(jwks.NewCachingClientWithOpts(jwksClientOpts), logger)
 	_ = jwtParser.AddTrustedIssuerURL("http://" + idpAddr)
 	idpSrv := idptest.NewHTTPServer(
 		idptest.WithHTTPAddress(idpAddr),

@@ -12,21 +12,15 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/acronis/go-appkit/log"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
-)
-
-// Default values.
-const (
-	DefaultHTTPClientRequestTimeout = time.Second * 30
-	DefaultGRPCClientRequestTimeout = time.Second * 30
 )
 
 // NewJWTParser creates a new JWTParser with the given configuration.
@@ -36,25 +30,23 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	logger := options.logger
-	if logger == nil {
-		logger = log.NewDisabledLogger()
-	}
+
+	logger := idputil.PrepareLogger(options.logger)
 
 	// Make caching JWKS client.
 	jwksCacheUpdateMinInterval := cfg.JWKS.Cache.UpdateMinInterval
 	if jwksCacheUpdateMinInterval == 0 {
 		jwksCacheUpdateMinInterval = jwks.DefaultCacheUpdateMinInterval
 	}
-	httpClientRequestTimeout := cfg.HTTPClient.RequestTimeout
-	if httpClientRequestTimeout == 0 {
-		httpClientRequestTimeout = DefaultHTTPClientRequestTimeout
-	}
 	jwksClientOpts := jwks.CachingClientOpts{
-		ClientOpts:             jwks.ClientOpts{PrometheusLibInstanceLabel: options.prometheusLibInstanceLabel},
+		ClientOpts: jwks.ClientOpts{
+			Logger:                     logger,
+			HTTPClient:                 idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, logger),
+			PrometheusLibInstanceLabel: options.prometheusLibInstanceLabel,
+		},
 		CacheUpdateMinInterval: jwksCacheUpdateMinInterval,
 	}
-	jwksClient := jwks.NewCachingClientWithOpts(&http.Client{Timeout: httpClientRequestTimeout}, logger, jwksClientOpts)
+	jwksClient := jwks.NewCachingClientWithOpts(jwksClientOpts)
 
 	// Make JWT parser.
 
@@ -134,10 +126,8 @@ func NewTokenIntrospector(
 	for _, opt := range opts {
 		opt(&options)
 	}
-	logger := options.logger
-	if logger == nil {
-		logger = log.NewDisabledLogger()
-	}
+
+	logger := idputil.PrepareLogger(options.logger)
 
 	if len(cfg.JWT.TrustedIssuers) == 0 && len(cfg.JWT.TrustedIssuerURLs) == 0 {
 		logger.Warn("list of trusted issuers is empty, jwt introspection may not work properly")
@@ -156,15 +146,10 @@ func NewTokenIntrospector(
 		}
 	}
 
-	httpClientRequestTimeout := cfg.HTTPClient.RequestTimeout
-	if httpClientRequestTimeout == 0 {
-		httpClientRequestTimeout = DefaultHTTPClientRequestTimeout
-	}
-
 	introspectorOpts := idptoken.IntrospectorOpts{
 		StaticHTTPEndpoint:            cfg.Introspection.Endpoint,
 		GRPCClient:                    grpcClient,
-		HTTPClient:                    &http.Client{Timeout: httpClientRequestTimeout},
+		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, logger),
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
 		Logger:                        logger,
 		ScopeFilter:                   scopeFilter,

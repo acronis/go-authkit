@@ -27,8 +27,6 @@ import (
 	"github.com/acronis/go-authkit/jwt"
 )
 
-const DefaultRequestTimeout = 30 * time.Second
-
 const JWTTypeAccessToken = "at+jwt"
 
 const TokenTypeBearer = "bearer"
@@ -137,11 +135,9 @@ func NewIntrospector(tokenProvider IntrospectionTokenProvider) *Introspector {
 // NewIntrospectorWithOpts creates a new Introspector with the given token provider and options.
 // See IntrospectorOpts for more details.
 func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opts IntrospectorOpts) *Introspector {
+	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: DefaultRequestTimeout}
-	}
-	if opts.Logger == nil {
-		opts.Logger = log.NewDisabledLogger()
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.Logger)
 	}
 
 	values := url.Values{}

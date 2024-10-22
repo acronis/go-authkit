@@ -8,7 +8,6 @@ package idptest
 
 import (
 	"context"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ func TestMakeTokenStringWithHeader(t *testing.T) {
 		},
 	}
 
-	parser := jwt.NewParser(jwks.NewCachingClient(http.DefaultClient, logger), logger)
+	parser := jwt.NewParser(jwks.NewCachingClient(), logger)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 	parsedClaims, err := parser.Parse(context.Background(), MustMakeTokenStringSignedWithTestKey(jwtClaims))
 	require.NoError(t, err)

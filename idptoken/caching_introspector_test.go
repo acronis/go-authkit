@@ -8,7 +8,6 @@ package idptoken_test
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	gotesting "testing"
 	"time"
@@ -36,7 +35,7 @@ func TestCachingIntrospector_IntrospectToken(t *gotesting.T) {
 	tokenProvider := idptest.NewSimpleTokenProvider(accessToken)
 
 	logger := log.NewDisabledLogger()
-	jwtParser := jwt.NewParser(jwks.NewClient(http.DefaultClient, logger), logger)
+	jwtParser := jwt.NewParser(jwks.NewClient(), logger)
 	require.NoError(t, jwtParser.AddTrustedIssuerURL(idpSrv.URL()))
 	serverIntrospector.JWTParser = jwtParser
 

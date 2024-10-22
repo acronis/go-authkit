@@ -31,6 +31,12 @@ type jwksData struct {
 
 // ClientOpts contains options for the JWKS client.
 type ClientOpts struct {
+	// HTTPClient is an HTTP client for making requests.
+	HTTPClient *http.Client
+
+	// Logger is a logger for the client.
+	Logger log.FieldLogger
+
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
 	PrometheusLibInstanceLabel string
@@ -47,14 +53,18 @@ type Client struct {
 }
 
 // NewClient returns a new Client.
-func NewClient(httpClient *http.Client, logger log.FieldLogger) *Client {
-	return NewClientWithOpts(httpClient, logger, ClientOpts{})
+func NewClient() *Client {
+	return NewClientWithOpts(ClientOpts{})
 }
 
 // NewClientWithOpts returns a new Client with options.
-func NewClientWithOpts(httpClient *http.Client, logger log.FieldLogger, opts ClientOpts) *Client {
+func NewClientWithOpts(opts ClientOpts) *Client {
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "jwks_client")
-	return &Client{httpClient, logger, promMetrics}
+	opts.Logger = idputil.PrepareLogger(opts.Logger)
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.Logger)
+	}
+	return &Client{httpClient: opts.HTTPClient, logger: opts.Logger, promMetrics: promMetrics}
 }
 
 func (c *Client) getRSAPubKeysForIssuer(ctx context.Context, issuerURL string) (map[string]interface{}, error) {

@@ -10,13 +10,11 @@ import (
 	"context"
 	"crypto/rsa"
 	"errors"
-	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/idptest"
@@ -32,8 +30,7 @@ func TestCachingClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(issuerConfigHandler)
 		defer issuerConfigServer.Close()
 
-		cachingClient := jwks.NewCachingClientWithOpts(http.DefaultClient, log.NewDisabledLogger(),
-			jwks.CachingClientOpts{CacheUpdateMinInterval: time.Second * 10})
+		cachingClient := jwks.NewCachingClientWithOpts(jwks.CachingClientOpts{CacheUpdateMinInterval: time.Second * 10})
 		var wg sync.WaitGroup
 		const callsNum = 10
 		wg.Add(callsNum)
@@ -75,8 +72,7 @@ func TestCachingClient_GetRSAPublicKey(t *testing.T) {
 		const unknownKeyID = "77777777-7777-7777-7777-777777777777"
 		const cacheUpdateMinInterval = time.Second * 1
 
-		cachingClient := jwks.NewCachingClientWithOpts(http.DefaultClient, log.NewDisabledLogger(),
-			jwks.CachingClientOpts{CacheUpdateMinInterval: cacheUpdateMinInterval})
+		cachingClient := jwks.NewCachingClientWithOpts(jwks.CachingClientOpts{CacheUpdateMinInterval: cacheUpdateMinInterval})
 
 		doGetPublicKeyByUnknownID := func(callsNum int) {
 			t.Helper()
