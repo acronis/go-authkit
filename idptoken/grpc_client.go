@@ -22,9 +22,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/acronis/go-authkit/idptoken/pb"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/metrics"
 	"github.com/acronis/go-authkit/jwt"
 )
+
+const DefaultGRPCClientRequestTimeout = time.Second * 30
 
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
@@ -61,11 +64,9 @@ func NewGRPCClient(
 func NewGRPCClientWithOpts(
 	target string, transportCreds credentials.TransportCredentials, opts GRPCClientOpts,
 ) (*GRPCClient, error) {
-	if opts.Logger == nil {
-		opts.Logger = log.NewDisabledLogger()
-	}
+	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.RequestTimeout == 0 {
-		opts.RequestTimeout = time.Second * 30
+		opts.RequestTimeout = DefaultGRPCClientRequestTimeout
 	}
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(transportCreds),

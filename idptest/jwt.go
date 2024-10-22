@@ -21,6 +21,16 @@ func SignToken(token *jwtgo.Token, rsaPrivateKey interface{}) (string, error) {
 	return token.SignedString(rsaPrivateKey)
 }
 
+// MustSignToken signs token with key.
+// It panics if error occurs.
+func MustSignToken(token *jwtgo.Token, rsaPrivateKey interface{}) string {
+	s, err := SignToken(token, rsaPrivateKey)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 // MakeTokenStringWithHeader create test signed token with claims and headers.
 func MakeTokenStringWithHeader(
 	claims jwtgo.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},

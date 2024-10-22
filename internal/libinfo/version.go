@@ -12,6 +12,10 @@ import (
 	"runtime/debug"
 )
 
+const LibName = "go-authkit"
+
+const libPath = "github.com/acronis/" + LibName
+
 var libVersion string
 var libVersionOnce sync.Once
 

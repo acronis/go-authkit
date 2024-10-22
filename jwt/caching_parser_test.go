@@ -9,7 +9,6 @@ package jwt_test
 import (
 	"context"
 	"crypto/sha256"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -54,7 +53,7 @@ func TestCachingParser_Parse(t *testing.T) {
 	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(http.DefaultClient, logger), logger)
+	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(), logger)
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 
@@ -89,7 +88,7 @@ func TestCachingParser_CheckExpiration(t *testing.T) {
 	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(jwtTTL))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(http.DefaultClient, logger), logger)
+	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(), logger)
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 

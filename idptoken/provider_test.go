@@ -104,7 +104,7 @@ func TestProviderWithCache(t *testing.T) {
 			MinRefreshPeriod: 1 * time.Second,
 			CustomHeaders:    map[string]string{"User-Agent": expectedUserAgent},
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		_, tokenErr := provider.GetTokenWithHeaders(
 			context.Background(), testClientID, server.URL(),
@@ -133,7 +133,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		cachedToken, tokenErr := provider.GetToken(
 			context.Background(), testClientID, server.URL(), "tenants:read",
@@ -172,7 +172,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 
 		tokenOld, tokenErr := provider.GetToken(
@@ -205,7 +205,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 10 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 
 		tokenOld, tokenErr := provider.GetToken(
@@ -242,7 +242,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		_, tokenErr := provider.GetToken(
 			context.Background(), testClientID, server.URL(), "tenants:read",
@@ -277,7 +277,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		_, tokenErr := provider.GetToken(context.Background(), testClientID, server.URL(), "tenants:read")
 		require.NoError(t, tokenErr)
@@ -318,7 +318,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials...)
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		_, tokenErr := provider.GetToken(
 			context.Background(), testClientID, server.URL(), "tenants:read",
@@ -357,7 +357,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, opts, credentials[0])
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials[:1], opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		provider.RegisterSource(credentials[1])
 		_, tokenErr := provider.GetToken(
@@ -380,7 +380,7 @@ func TestProviderWithCache(t *testing.T) {
 			Logger:           logger,
 			MinRefreshPeriod: 1 * time.Second,
 		}
-		provider := idptoken.NewProviderWithOpts(httpClient, opts, credentials)
+		provider := idptoken.NewProviderWithOpts(credentials, opts)
 		go provider.RefreshTokensPeriodically(context.Background())
 		_, tokenErr := provider.GetToken(context.Background(), "tenants:read")
 		require.NoError(t, tokenErr)
@@ -396,7 +396,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := idptoken.Source{
 			ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
 		}
-		provider := idptoken.NewMultiSourceProvider(httpClient)
+		provider := idptoken.NewMultiSourceProviderWithOpts(nil, idptoken.ProviderOpts{HTTPClient: httpClient})
 		go provider.RefreshTokensPeriodically(context.Background())
 		provider.RegisterSource(credentials)
 		_, tokenErr := provider.GetToken(
@@ -416,7 +416,8 @@ func TestProviderWithCache(t *testing.T) {
 			ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
 		}
 		tokenCache := idptoken.NewInMemoryTokenCache()
-		provider := idptoken.NewMultiSourceProviderWithOpts(httpClient, idptoken.ProviderOpts{CustomCacheInstance: tokenCache})
+		provider := idptoken.NewMultiSourceProviderWithOpts(nil, idptoken.ProviderOpts{
+			CustomCacheInstance: tokenCache, HTTPClient: httpClient})
 		go provider.RefreshTokensPeriodically(context.Background())
 		provider.RegisterSource(credentials)
 		credentials.ClientSecret = "newsecret"

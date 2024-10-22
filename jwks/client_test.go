@@ -16,7 +16,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acronis/go-appkit/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/idptest"
@@ -30,7 +29,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.NoError(t, err)
 		require.NotNil(t, pubKey)
@@ -43,7 +42,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 		issuerConfigServer.Close() // Close the server immediately.
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
@@ -59,7 +58,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		}))
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
@@ -76,7 +75,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		}))
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
@@ -93,7 +92,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.Error(t, err)
 		var jwksErr *jwks.GetJWKSError
@@ -112,7 +111,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, idptest.TestKeyID)
 		require.Error(t, err)
 		var jwksErr *jwks.GetJWKSError
@@ -131,7 +130,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 
 		const unknownKeyID = "77777777-7777-7777-7777-777777777777"
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		pubKey, err := client.GetRSAPublicKey(context.Background(), issuerConfigServer.URL, unknownKeyID)
 		require.Error(t, err)
 		var jwkErr *jwks.JWKNotFoundError
@@ -147,7 +146,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 		defer issuerConfigServer.Close()
 
-		client := jwks.NewClient(http.DefaultClient, log.NewDisabledLogger())
+		client := jwks.NewClient()
 		ctx, cancelCtxFn := context.WithCancel(context.Background())
 		cancelCtxFn() // Emulate canceling context.
 		pubKey, err := client.GetRSAPublicKey(ctx, issuerConfigServer.URL, idptest.TestKeyID)

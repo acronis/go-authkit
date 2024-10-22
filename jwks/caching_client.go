@@ -9,11 +9,9 @@ package jwks
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	"github.com/acronis/go-appkit/lrucache"
 )
 
@@ -44,17 +42,17 @@ type issuerCacheEntry struct {
 }
 
 // NewCachingClient returns a new Client that can cache fetched data.
-func NewCachingClient(httpClient *http.Client, logger log.FieldLogger) *CachingClient {
-	return NewCachingClientWithOpts(httpClient, logger, CachingClientOpts{})
+func NewCachingClient() *CachingClient {
+	return NewCachingClientWithOpts(CachingClientOpts{})
 }
 
 // NewCachingClientWithOpts returns a new Client that can cache fetched data with options.
-func NewCachingClientWithOpts(httpClient *http.Client, logger log.FieldLogger, opts CachingClientOpts) *CachingClient {
+func NewCachingClientWithOpts(opts CachingClientOpts) *CachingClient {
 	if opts.CacheUpdateMinInterval == 0 {
 		opts.CacheUpdateMinInterval = DefaultCacheUpdateMinInterval
 	}
 	return &CachingClient{
-		rawClient:              NewClientWithOpts(httpClient, logger, opts.ClientOpts),
+		rawClient:              NewClientWithOpts(opts.ClientOpts),
 		issuerCache:            make(map[string]issuerCacheEntry),
 		cacheUpdateMinInterval: opts.CacheUpdateMinInterval,
 	}

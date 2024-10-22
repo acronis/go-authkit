@@ -14,6 +14,7 @@ import (
 	"github.com/acronis/go-appkit/config"
 
 	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
 )
@@ -142,8 +143,8 @@ func (c *Config) KeyPrefix() string {
 
 // SetProviderDefaults sets default configuration values for auth in config.DataProvider.
 func (c *Config) SetProviderDefaults(dp config.DataProvider) {
-	dp.SetDefault(cfgKeyHTTPClientRequestTimeout, DefaultHTTPClientRequestTimeout.String())
-	dp.SetDefault(cfgKeyGRPCClientRequestTimeout, DefaultGRPCClientRequestTimeout.String())
+	dp.SetDefault(cfgKeyHTTPClientRequestTimeout, idputil.DefaultHTTPRequestTimeout.String())
+	dp.SetDefault(cfgKeyGRPCClientRequestTimeout, idptoken.DefaultGRPCClientRequestTimeout.String())
 	dp.SetDefault(cfgKeyJWTClaimsCacheMaxEntries, jwt.DefaultClaimsCacheMaxEntries)
 	dp.SetDefault(cfgKeyJWKSCacheUpdateMinInterval, jwks.DefaultCacheUpdateMinInterval.String())
 	dp.SetDefault(cfgKeyIntrospectionClaimsCacheMaxEntries, idptoken.DefaultIntrospectionClaimsCacheMaxEntries)
