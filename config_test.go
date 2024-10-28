@@ -56,7 +56,7 @@ auth:
     accessTokenScope:
       - token_introspector
     grpc:
-      target: "127.0.0.1:1234"
+      endpoint: "127.0.0.1:1234"
       tls:
         enabled: true
         caCert: ca-cert.pem
@@ -102,7 +102,7 @@ auth:
 			},
 			AccessTokenScope: []string{"token_introspector"},
 			GRPC: IntrospectionGRPCConfig{
-				Target: "127.0.0.1:1234",
+				Endpoint: "127.0.0.1:1234",
 				TLS: GRPCTLSConfig{
 					Enabled:    true,
 					CACert:     "ca-cert.pem",
