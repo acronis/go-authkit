@@ -1,3 +1,9 @@
+/*
+Copyright © 2024 Acronis International GmbH.
+
+Released under MIT license.
+*/
+
 package main
 
 import (
@@ -10,9 +16,9 @@ import (
 	"github.com/acronis/go-appkit/config"
 	"github.com/acronis/go-appkit/httpserver/middleware"
 	"github.com/acronis/go-appkit/log"
-	"github.com/acronis/go-authkit/idptoken"
 
 	"github.com/acronis/go-authkit"
+	"github.com/acronis/go-authkit/idptoken"
 )
 
 const (
@@ -36,39 +42,51 @@ func runApp() error {
 	logger, loggerClose := log.NewLogger(cfg.Log)
 	defer loggerClose()
 
-	// create JWT parser and token introspector
+	// Create JWT parser.
 	jwtParser, err := authkit.NewJWTParser(cfg.Auth, authkit.WithJWTParserLogger(logger))
 	if err != nil {
 		return fmt.Errorf("create JWT parser: %w", err)
 	}
+
+	// Create token introspector.
 	introspectionScopeFilter := []idptoken.IntrospectionScopeFilterAccessPolicy{
 		{ResourceNamespace: serviceAccessPolicy}}
 	tokenIntrospector, err := authkit.NewTokenIntrospector(cfg.Auth, introspectionTokenProvider{},
 		introspectionScopeFilter, authkit.WithTokenIntrospectorLogger(logger))
+	if err != nil {
+		return fmt.Errorf("create token introspector: %w", err)
+	}
+	if tokenIntrospector.GRPCClient != nil {
+		defer func() {
+			if closeErr := tokenIntrospector.GRPCClient.Close(); closeErr != nil {
+				logger.Error("failed to close gRPC client", log.Error(closeErr))
+			}
+		}()
+	}
 
 	logMw := middleware.Logging(logger)
 
-	// configure JWTAuthMiddleware that performs only authentication via OAuth2 token introspection endpoint
+	// Configure JWTAuthMiddleware that performs only authentication via OAuth2 token introspection endpoint.
 	authNMw := authkit.JWTAuthMiddleware(serviceErrorDomain, jwtParser,
 		authkit.WithJWTAuthMiddlewareTokenIntrospector(tokenIntrospector))
 
-	// configure JWTAuthMiddleware that performs authentication via token introspection endpoint
-	// and authorization based on the user's roles
+	// Configure JWTAuthMiddleware that performs authentication via token introspection endpoint
+	// and authorization based on the user's roles.
 	authZMw := authkit.JWTAuthMiddleware(serviceErrorDomain, jwtParser,
 		authkit.WithJWTAuthMiddlewareTokenIntrospector(tokenIntrospector),
 		authkit.WithJWTAuthMiddlewareVerifyAccess(
 			authkit.NewVerifyAccessByRolesInJWT(authkit.Role{Namespace: serviceAccessPolicy, Name: "admin"})))
 
-	// create HTTP server and start it
+	// Create HTTP server and start it.
 	srvMux := http.NewServeMux()
-	// "/" endpoint will be available for all authenticated users
+	// "/" endpoint will be available for all authenticated users.
 	srvMux.Handle("/", logMw(authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", jwtClaims.Subject)))
 	}))))
-	// "/admin" endpoint will be available only for users with the "admin" role
+	// "/admin" endpoint will be available only for users with the "admin" role.
 	srvMux.Handle("/admin", logMw(authZMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
+		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // Get JWT claims from the request context.
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hi, %s", jwtClaims.Subject)))
 	}))))
 	if err = http.ListenAndServe(":8080", srvMux); err != nil && !errors.Is(err, http.ErrServerClosed) {

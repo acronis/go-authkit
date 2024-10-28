@@ -27,7 +27,10 @@ import (
 	"github.com/acronis/go-authkit/jwt"
 )
 
+// DefaultGRPCClientRequestTimeout is a default timeout for the gRPC requests.
 const DefaultGRPCClientRequestTimeout = time.Second * 30
+
+const grpcMetaAuthorization = "authorization"
 
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
@@ -49,8 +52,6 @@ type GRPCClient struct {
 	reqTimeout  time.Duration
 	promMetrics *metrics.PrometheusMetrics
 }
-
-const grpcMetaAuthorization = "authorization"
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
 func NewGRPCClient(
@@ -89,6 +90,18 @@ func (c *GRPCClient) Close() error {
 	return c.clientConn.Close()
 }
 
+// TokenData contains the data of the token issuing response from the IDP service.
+type TokenData struct {
+	// AccessToken is the issued access token.
+	AccessToken string
+
+	// TokenType is the type of the issued access token.
+	TokenType string
+
+	// ExpiresIn is the duration of the access token validity.
+	ExpiresIn time.Duration
+}
+
 // IntrospectToken introspects the token using the IDP token service.
 func (c *GRPCClient) IntrospectToken(
 	ctx context.Context, token string, scopeFilter []IntrospectionScopeFilterAccessPolicy, accessToken string,
@@ -103,25 +116,14 @@ func (c *GRPCClient) IntrospectToken(
 
 	ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
 
-	ctx, ctxCancel := context.WithTimeout(ctx, c.reqTimeout)
-	defer ctxCancel()
-
-	const methodName = "IDPTokenService/IntrospectToken"
-	startTime := time.Now()
-	resp, err := c.client.IntrospectToken(ctx, &req)
-	elapsed := time.Since(startTime)
-	if err != nil {
-		var code grpccodes.Code
-		if st, ok := grpcstatus.FromError(err); ok {
-			code = st.Code()
-		}
-		c.promMetrics.ObserveGRPCClientRequest(methodName, code, elapsed)
-		if code == grpccodes.Unauthenticated {
-			return IntrospectionResult{}, ErrTokenIntrospectionUnauthenticated
-		}
-		return IntrospectionResult{}, fmt.Errorf("introspect token: %w", err)
+	var resp *pb.IntrospectTokenResponse
+	if err := c.do(ctx, "IDPTokenService/IntrospectToken", func(ctx context.Context) error {
+		var innerErr error
+		resp, innerErr = c.client.IntrospectToken(ctx, &req)
+		return innerErr
+	}); err != nil {
+		return IntrospectionResult{}, err
 	}
-	c.promMetrics.ObserveGRPCClientRequest(methodName, grpccodes.OK, elapsed)
 
 	res := IntrospectionResult{
 		Active:    resp.GetActive(),
@@ -155,6 +157,53 @@ func (c *GRPCClient) IntrospectToken(
 		}
 	}
 	return res, nil
+}
+
+// ExchangeToken exchanges the token requesting a new token with the specified version.
+func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, tokenVersion uint32) (TokenData, error) {
+	req := pb.CreateTokenRequest{
+		GrantType:    idputil.GrantTypeJWTBearer,
+		Assertion:    token,
+		TokenVersion: tokenVersion,
+	}
+
+	var resp *pb.CreateTokenResponse
+	if err := c.do(ctx, "IDPTokenService/CreateToken", func(ctx context.Context) error {
+		var innerErr error
+		resp, innerErr = c.client.CreateToken(ctx, &req)
+		return innerErr
+	}); err != nil {
+		return TokenData{}, err
+	}
+
+	return TokenData{
+		AccessToken: resp.GetAccessToken(),
+		TokenType:   resp.GetTokenType(),
+		ExpiresIn:   time.Second * time.Duration(resp.GetExpiresIn()),
+	}, nil
+}
+
+func (c *GRPCClient) do(ctx context.Context, methodName string, call func(ctx context.Context) error) error {
+	ctx, ctxCancel := context.WithTimeout(ctx, c.reqTimeout)
+	defer ctxCancel()
+
+	startTime := time.Now()
+	err := call(ctx)
+	elapsed := time.Since(startTime)
+	if err != nil {
+		var code grpccodes.Code
+		if st, ok := grpcstatus.FromError(err); ok {
+			code = st.Code()
+		}
+		c.promMetrics.ObserveGRPCClientRequest(methodName, code, elapsed)
+		if code == grpccodes.Unauthenticated {
+			return ErrUnauthenticated
+		}
+		return err
+	}
+	c.promMetrics.ObserveGRPCClientRequest(methodName, grpccodes.OK, elapsed)
+
+	return nil
 }
 
 type statsHandler struct {

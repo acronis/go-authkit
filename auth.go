@@ -121,7 +121,7 @@ func NewTokenIntrospector(
 	tokenProvider idptoken.IntrospectionTokenProvider,
 	scopeFilter []idptoken.IntrospectionScopeFilterAccessPolicy,
 	opts ...TokenIntrospectorOption,
-) (TokenIntrospector, error) {
+) (*idptoken.Introspector, error) {
 	var options tokenIntrospectorOptions
 	for _, opt := range opts {
 		opt(&options)
@@ -147,7 +147,7 @@ func NewTokenIntrospector(
 	}
 
 	introspectorOpts := idptoken.IntrospectorOpts{
-		StaticHTTPEndpoint:            cfg.Introspection.Endpoint,
+		HTTPEndpoint:                  cfg.Introspection.Endpoint,
 		GRPCClient:                    grpcClient,
 		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, logger),
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
@@ -155,35 +155,26 @@ func NewTokenIntrospector(
 		ScopeFilter:                   scopeFilter,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		PrometheusLibInstanceLabel:    options.prometheusLibInstanceLabel,
+		ClaimsCache: idptoken.IntrospectorCacheOpts{
+			Enabled:    cfg.Introspection.ClaimsCache.Enabled,
+			MaxEntries: cfg.Introspection.ClaimsCache.MaxEntries,
+			TTL:        cfg.Introspection.ClaimsCache.TTL,
+		},
+		NegativeCache: idptoken.IntrospectorCacheOpts{
+			Enabled:    cfg.Introspection.NegativeCache.Enabled,
+			MaxEntries: cfg.Introspection.NegativeCache.MaxEntries,
+			TTL:        cfg.Introspection.NegativeCache.TTL,
+		},
 	}
-
-	if cfg.Introspection.ClaimsCache.Enabled || cfg.Introspection.NegativeCache.Enabled {
-		cachingIntrospector, err := idptoken.NewCachingIntrospectorWithOpts(tokenProvider, idptoken.CachingIntrospectorOpts{
-			IntrospectorOpts: introspectorOpts,
-			ClaimsCache: idptoken.CachingIntrospectorCacheOpts{
-				Enabled:    cfg.Introspection.ClaimsCache.Enabled,
-				MaxEntries: cfg.Introspection.ClaimsCache.MaxEntries,
-				TTL:        cfg.Introspection.ClaimsCache.TTL,
-			},
-			NegativeCache: idptoken.CachingIntrospectorCacheOpts{
-				Enabled:    cfg.Introspection.NegativeCache.Enabled,
-				MaxEntries: cfg.Introspection.NegativeCache.MaxEntries,
-				TTL:        cfg.Introspection.NegativeCache.TTL,
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("new caching introspector: %w", err)
-		}
-		if err = addTrustedIssuers(cachingIntrospector, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
-			return nil, err
-		}
-		return cachingIntrospector, nil
-	}
-
-	introspector := idptoken.NewIntrospectorWithOpts(tokenProvider, introspectorOpts)
-	if err := addTrustedIssuers(introspector, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
+	introspector, err := idptoken.NewIntrospectorWithOpts(tokenProvider, introspectorOpts)
+	if err != nil {
 		return nil, err
 	}
+
+	if err = addTrustedIssuers(introspector, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
+		return nil, err
+	}
+
 	return introspector, nil
 }
 

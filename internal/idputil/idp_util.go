@@ -17,6 +17,12 @@ import (
 	"github.com/acronis/go-authkit/internal/libinfo"
 )
 
+const GrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint: gosec // false positive
+
+const JWTTypeAccessToken = "at+jwt"
+
+const TokenTypeBearer = "bearer"
+
 const (
 	DefaultHTTPRequestTimeout          = 30 * time.Second
 	DefaultHTTPRequestMaxRetryAttempts = 3

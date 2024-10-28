@@ -1,9 +1,14 @@
+/*
+Copyright © 2024 Acronis International GmbH.
+
+Released under MIT license.
+*/
+
 package main
 
 import (
 	"context"
 	"errors"
-	"github.com/acronis/go-authkit"
 	golog "log"
 	"net/http"
 	"os"
@@ -16,6 +21,7 @@ import (
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/acronis/go-authkit"
 	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/jwks"

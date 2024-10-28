@@ -32,6 +32,7 @@ import (
 	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/idptoken/pb"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/testing"
 	"github.com/acronis/go-authkit/jwt"
 )
@@ -126,9 +127,12 @@ func TestNewJWTParser(t *gotesting.T) {
 
 func TestNewTokenIntrospector(t *gotesting.T) {
 	const testIss = "test-issuer"
+	const validAccessToken = "access-token-with-introspection-permission"
 
 	httpServerIntrospector := testing.NewHTTPServerTokenIntrospectorMock()
+	httpServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
 	grpcServerIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+	grpcServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
 
 	// Start testing HTTP IDP server.
 	httpIDPSrv := idptest.NewHTTPServer(idptest.WithHTTPTokenIntrospector(httpServerIntrospector))
@@ -171,9 +175,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
 	httpServerIntrospector.SetResultForToken(opaqueToken, idptoken.IntrospectionResult{
-		Active: true, TokenType: idptoken.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueTokenScope}})
+		Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueTokenScope}})
 	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
-		Active: true, TokenType: idptoken.TokenTypeBearer, Scope: []*pb.AccessTokenScope{
+		Active: true, TokenType: idputil.TokenTypeBearer, Scope: []*pb.AccessTokenScope{
 			{
 				TenantUuid:        opaqueTokenScope[0].TenantUUID,
 				ResourceNamespace: opaqueTokenScope[0].ResourceNamespace,
@@ -187,7 +191,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 		cfg            *Config
 		token          string
 		expectedResult idptoken.IntrospectionResult
-		checkFn        func(t *gotesting.T, introspector TokenIntrospector)
+		checkCacheFn   func(t *gotesting.T, introspector *idptoken.Introspector)
 	}{
 		{
 			name:  "new token introspector, dynamic endpoint, trusted issuers map",
@@ -198,8 +202,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    *claimsWithNamedIssuer,
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.Introspector{}, introspector)
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 		{
@@ -211,8 +216,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    *claims,
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.Introspector{}, introspector)
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 		{
@@ -227,10 +233,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    *claimsWithNamedIssuer,
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.CachingIntrospector{}, introspector)
-				cachingIntrospector := introspector.(*idptoken.CachingIntrospector)
-				require.Equal(t, 1, cachingIntrospector.ClaimsCache.Len(context.Background()))
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 		{
@@ -245,10 +250,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    *claims,
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.CachingIntrospector{}, introspector)
-				cachingIntrospector := introspector.(*idptoken.CachingIntrospector)
-				require.Equal(t, 1, cachingIntrospector.ClaimsCache.Len(context.Background()))
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 		{
@@ -266,10 +270,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    jwt.Claims{Scope: opaqueTokenScope},
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.CachingIntrospector{}, introspector)
-				cachingIntrospector := introspector.(*idptoken.CachingIntrospector)
-				require.Equal(t, 1, cachingIntrospector.ClaimsCache.Len(context.Background()))
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 		{
@@ -285,7 +288,6 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 							CACert:  certFile,
 						},
 					},
-					Endpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
 				},
 			},
 			token: opaqueToken,
@@ -294,8 +296,9 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				TokenType: "bearer",
 				Claims:    jwt.Claims{Scope: opaqueTokenScope},
 			},
-			checkFn: func(t *gotesting.T, introspector TokenIntrospector) {
-				require.IsType(t, &idptoken.Introspector{}, introspector)
+			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
+				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
+				require.Empty(t, introspector.NegativeCache.Len(context.Background()))
 			},
 		},
 	}
@@ -306,14 +309,14 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			httpServerIntrospector.JWTParser = jwtParser
 			grpcServerIntrospector.JWTParser = jwtParser
 
-			introspector, err := NewTokenIntrospector(tt.cfg, idptest.NewSimpleTokenProvider("access-token"), nil)
+			introspector, err := NewTokenIntrospector(tt.cfg, idptest.NewSimpleTokenProvider(validAccessToken), nil)
 			require.NoError(t, err)
 
 			result, err := introspector.IntrospectToken(context.Background(), tt.token)
 			require.NoError(t, err)
 			require.Equal(t, tt.expectedResult, result)
-			if tt.checkFn != nil {
-				tt.checkFn(t, introspector)
+			if tt.checkCacheFn != nil {
+				tt.checkCacheFn(t, introspector)
 			}
 		})
 	}
