@@ -13,7 +13,7 @@ import (
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/mendsley/gojwk"
 
-	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/idputil"
 )
 
 // SignToken signs token with key.
@@ -36,7 +36,7 @@ func MakeTokenStringWithHeader(
 	claims jwtgo.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},
 ) (string, error) {
 	token := jwtgo.NewWithClaims(jwtgo.SigningMethodRS256, claims)
-	token.Header["typ"] = idptoken.JWTTypeAccessToken
+	token.Header["typ"] = idputil.JWTTypeAccessToken
 	token.Header["kid"] = kid
 	for k, v := range header {
 		token.Header[k] = v

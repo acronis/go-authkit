@@ -35,10 +35,8 @@ const (
 	wellKnownPath           = "/.well-known/openid-configuration"
 )
 
-var (
-	// ErrSourceNotRegistered is returned if GetToken is requested for the unknown Source
-	ErrSourceNotRegistered = errors.New("cannot issue token for unknown source")
-)
+// ErrSourceNotRegistered is returned if GetToken is requested for the unknown Source
+var ErrSourceNotRegistered = errors.New("cannot issue token for unknown source")
 
 // UnexpectedIDPResponseError is an error representing an unexpected response
 type UnexpectedIDPResponseError struct {
@@ -50,8 +48,8 @@ func (e *UnexpectedIDPResponseError) Error() string {
 	return fmt.Sprintf(`%s responded with unexpected code %d`, e.IssueURL, e.HTTPCode)
 }
 
-// TokenData represents API-related token information
-type TokenData struct {
+// tokenData represents API-related token information
+type tokenData struct {
 	Data     string
 	ClientID string
 	issueURL string
@@ -70,7 +68,7 @@ var zeroTime = time.Time{}
 
 // TokenDetails represents the data to be stored in TokenCache
 type TokenDetails struct {
-	token          TokenData
+	token          tokenData
 	requestedScope []string
 	sourceURL      string
 	issued         time.Time
@@ -237,11 +235,11 @@ func (p *MultiSourceProvider) RefreshTokensPeriodically(ctx context.Context) {
 
 func (p *MultiSourceProvider) issueToken(
 	ctx context.Context, clientID, sourceURL string, customHeaders map[string]string, scope []string,
-) (TokenData, error) {
+) (tokenData, error) {
 	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
 
 	if !found {
-		return TokenData{}, ErrSourceNotRegistered
+		return tokenData{}, ErrSourceNotRegistered
 	}
 
 	headers := make(map[string]string)
@@ -257,7 +255,7 @@ func (p *MultiSourceProvider) issueToken(
 	})
 	if errEns != nil {
 		p.logger.Error(fmt.Sprintf("(%s, %s): ensure issuer URL", sourceURL, clientID), log.Error(errEns))
-		return TokenData{}, errEns
+		return tokenData{}, errEns
 	}
 
 	sortedScope := uniqAndSort(scope)
@@ -269,10 +267,10 @@ func (p *MultiSourceProvider) issueToken(
 	})
 	if err != nil {
 		p.logger.Error(fmt.Sprintf("(%s, %s): issuing token", issuer.loadTokenURL(), clientID), log.Error(err))
-		return TokenData{}, err
+		return tokenData{}, err
 	}
 
-	return token.(TokenData), nil
+	return token.(tokenData), nil
 }
 
 func (p *MultiSourceProvider) ensureToken(
@@ -292,7 +290,7 @@ func (p *MultiSourceProvider) ensureToken(
 	return token.Data, nil
 }
 
-func (p *MultiSourceProvider) cacheToken(token TokenData, sourceURL string) {
+func (p *MultiSourceProvider) cacheToken(token tokenData, sourceURL string) {
 	issued := time.Now().UTC()
 	randInt, err := rand.Int(rand.Reader, big.NewInt(expiryDeltaMaxOffset))
 	if err != nil {
@@ -328,32 +326,32 @@ func (p *MultiSourceProvider) cacheToken(token TokenData, sourceURL string) {
 	}
 }
 
-func (p *MultiSourceProvider) getCachedOrInvalidate(clientID, sourceURL string, scope []string) (TokenData, error) {
+func (p *MultiSourceProvider) getCachedOrInvalidate(clientID, sourceURL string, scope []string) (tokenData, error) {
 	now := time.Now().UnixNano()
 	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
 	if !found {
-		return TokenData{}, fmt.Errorf("(%s, %s): not registered", sourceURL, clientID)
+		return tokenData{}, fmt.Errorf("(%s, %s): not registered", sourceURL, clientID)
 	}
 	if issuer.loadTokenURL() == "" {
-		return TokenData{}, fmt.Errorf("(%s, %s): issuer URL not acquired", sourceURL, clientID)
+		return tokenData{}, fmt.Errorf("(%s, %s): issuer URL not acquired", sourceURL, clientID)
 	}
 
 	key := keyForCache(clientID, issuer.loadTokenURL(), uniqAndSort(scope))
 	details := p.cache.Get(key)
 	if details == nil {
-		return TokenData{}, errors.New("token not found in cache")
+		return tokenData{}, errors.New("token not found in cache")
 	}
 	if details.token.Expires.UnixNano() < now {
 		p.cache.Delete(key)
-		return TokenData{}, errors.New("token is expired")
+		return tokenData{}, errors.New("token is expired")
 	}
 	if details.invalidation.UnixNano() < now {
 		p.cache.Delete(key)
-		return TokenData{}, errors.New("token needs to be refreshed")
+		return tokenData{}, errors.New("token needs to be refreshed")
 	}
 	if details.issued.UnixNano() > now {
 		p.cache.Delete(key)
-		return TokenData{}, errors.New("token's issued time is invalid")
+		return tokenData{}, errors.New("token's issued time is invalid")
 	}
 	return details.token, nil
 }
@@ -559,10 +557,10 @@ func (ti *oauth2Issuer) ensureTokenURL(ctx context.Context, customHeaders map[st
 
 func (ti *oauth2Issuer) issueToken(
 	ctx context.Context, customHeaders map[string]string, scope []string,
-) (TokenData, error) {
+) (tokenData, error) {
 	tokenURL := ti.loadTokenURL()
 	if tokenURL == "" {
-		return TokenData{}, fmt.Errorf("token URL is empty")
+		return tokenData{}, fmt.Errorf("token URL is empty")
 	}
 	values := url.Values{}
 	values.Add("grant_type", "client_credentials")
@@ -572,7 +570,7 @@ func (ti *oauth2Issuer) issueToken(
 	}
 	req, reqErr := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(values.Encode()))
 	if reqErr != nil {
-		return TokenData{}, reqErr
+		return tokenData{}, reqErr
 	}
 	req = req.WithContext(ctx)
 	req.SetBasicAuth(ti.clientID, ti.clientSecret)
@@ -587,7 +585,7 @@ func (ti *oauth2Issuer) issueToken(
 
 	if err != nil {
 		ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, tokenURL, 0, elapsed, metrics.HTTPRequestErrorDo)
-		return TokenData{}, fmt.Errorf("do http request: %w", err)
+		return tokenData{}, fmt.Errorf("do http request: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -601,7 +599,7 @@ func (ti *oauth2Issuer) issueToken(
 	if err = json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
 		ti.promMetrics.ObserveHTTPClientRequest(
 			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorDecodeBody)
-		return TokenData{}, fmt.Errorf(
+		return tokenData{}, fmt.Errorf(
 			"(%s, %s): read and unmarshal IDP response: %w", ti.loadTokenURL(), ti.clientID, err,
 		)
 	}
@@ -609,13 +607,13 @@ func (ti *oauth2Issuer) issueToken(
 	if resp.StatusCode != http.StatusOK {
 		ti.promMetrics.ObserveHTTPClientRequest(
 			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
-		return TokenData{}, &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadTokenURL()}
+		return tokenData{}, &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadTokenURL()}
 	}
 
 	ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, tokenURL, resp.StatusCode, elapsed, "")
 	expires := time.Now().Add(time.Second * time.Duration(tokenResponse.ExpiresIn))
 	ti.logger.Infof("(%s, %s): issued token, expires on %s", ti.loadTokenURL(), ti.clientID, expires.UTC())
-	return TokenData{
+	return tokenData{
 		Data:     tokenResponse.AccessToken,
 		Scope:    scope,
 		Expires:  expires,

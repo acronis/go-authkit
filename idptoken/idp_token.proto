@@ -19,7 +19,7 @@ service IDPTokenService {
   // The token is considered active if
   //  1) it's not expired;
   //  2) it's not revoked;
-  //  3) it has has the valid signature.
+  //  3) it has a valid signature.
   rpc IntrospectToken (IntrospectTokenRequest) returns (IntrospectTokenResponse);
 }
 

@@ -9,6 +9,7 @@ package idptoken
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/acronis/go-appkit/log"
+	"github.com/acronis/go-appkit/lrucache"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 
 	"github.com/acronis/go-authkit/internal/idputil"
@@ -27,13 +30,25 @@ import (
 	"github.com/acronis/go-authkit/jwt"
 )
 
-const JWTTypeAccessToken = "at+jwt"
-
-const TokenTypeBearer = "bearer"
-
 const minAccessTokenProviderInvalidationInterval = time.Minute
 
 const tokenIntrospectorPromSource = "token_introspector"
+
+const (
+	// DefaultIntrospectionClaimsCacheMaxEntries is a default maximum number of entries in the claims cache.
+	// Claims cache is used for storing introspected active tokens.
+	DefaultIntrospectionClaimsCacheMaxEntries = 1000
+
+	// DefaultIntrospectionClaimsCacheTTL is a default time-to-live for the claims cache.
+	DefaultIntrospectionClaimsCacheTTL = 1 * time.Minute
+
+	// DefaultIntrospectionNegativeCacheMaxEntries is a default maximum number of entries in the negative cache.
+	// Negative cache is used for storing tokens that are not active.
+	DefaultIntrospectionNegativeCacheMaxEntries = 1000
+
+	// DefaultIntrospectionNegativeCacheTTL is a default time-to-live for the negative cache.
+	DefaultIntrospectionNegativeCacheTTL = 10 * time.Minute
+)
 
 // ErrTokenNotIntrospectable is returned when token is not introspectable.
 var ErrTokenNotIntrospectable = errors.New("token is not introspectable")
@@ -42,8 +57,8 @@ var ErrTokenNotIntrospectable = errors.New("token is not introspectable")
 // (i.e., it already contains all necessary information).
 var ErrTokenIntrospectionNotNeeded = errors.New("token introspection is not needed")
 
-// ErrTokenIntrospectionUnauthenticated is returned when token introspection is unauthenticated.
-var ErrTokenIntrospectionUnauthenticated = errors.New("token introspection is unauthenticated")
+// ErrUnauthenticated is returned when a request is unauthenticated.
+var ErrUnauthenticated = errors.New("request is unauthenticated")
 
 // TrustedIssNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
 // For example, it could be analyzed and then added to the list by calling AddTrustedIssuerURL method.
@@ -63,16 +78,16 @@ type IntrospectionScopeFilterAccessPolicy struct {
 
 // IntrospectorOpts is a set of options for creating Introspector.
 type IntrospectorOpts struct {
-	// GRPCClient is a GRPC client for doing introspection.
+	// GRPCClient is a gRPC client for doing introspection.
 	// If it is set, then introspection will be done using this client.
 	// Otherwise, introspection will be done via HTTP.
 	GRPCClient *GRPCClient
 
-	// StaticHTTPEndpoint is a static URL for introspection.
+	// HTTPEndpoint is a static URL for introspection.
 	// If it is set, then introspection will be done using this endpoint.
 	// Otherwise, introspection will be done using issuer URL (/.well-known/openid-configuration response).
 	// In this case, issuer URL should be present in JWT header or payload.
-	StaticHTTPEndpoint string
+	HTTPEndpoint string
 
 	// HTTPClient is an HTTP client for doing requests to /.well-known/openid-configuration and introspection endpoints.
 	HTTPClient *http.Client
@@ -95,6 +110,19 @@ type IntrospectorOpts struct {
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
 	PrometheusLibInstanceLabel string
+
+	// ClaimsCache is a configuration of how claims cache will be used.
+	ClaimsCache IntrospectorCacheOpts
+
+	// NegativeCache is a configuration of how negative cache will be used.
+	NegativeCache IntrospectorCacheOpts
+}
+
+// IntrospectorCacheOpts is a configuration of how cache will be used.
+type IntrospectorCacheOpts struct {
+	Enabled    bool
+	MaxEntries int
+	TTL        time.Duration
 }
 
 // Introspector is a struct for introspecting tokens.
@@ -105,9 +133,10 @@ type Introspector struct {
 
 	jwtParser *jwtgo.Parser
 
-	grpcClient    *GRPCClient
-	staticHTTPURL string
-	httpClient    *http.Client
+	GRPCClient *GRPCClient
+
+	httpEndpoint string
+	httpClient   *http.Client
 
 	scopeFilter               []IntrospectionScopeFilterAccessPolicy
 	scopeFilterFormURLEncoded string
@@ -118,6 +147,11 @@ type Introspector struct {
 	trustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 
 	promMetrics *metrics.PrometheusMetrics
+
+	ClaimsCache      IntrospectionClaimsCache
+	claimsCacheTTL   time.Duration
+	NegativeCache    IntrospectionNegativeCache
+	negativeCacheTTL time.Duration
 }
 
 // IntrospectionResult is a struct for introspection result.
@@ -128,13 +162,13 @@ type IntrospectionResult struct {
 }
 
 // NewIntrospector creates a new Introspector with the given token provider.
-func NewIntrospector(tokenProvider IntrospectionTokenProvider) *Introspector {
+func NewIntrospector(tokenProvider IntrospectionTokenProvider) (*Introspector, error) {
 	return NewIntrospectorWithOpts(tokenProvider, IntrospectorOpts{})
 }
 
 // NewIntrospectorWithOpts creates a new Introspector with the given token provider and options.
 // See IntrospectorOpts for more details.
-func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opts IntrospectorOpts) *Introspector {
+func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opts IntrospectorOpts) (*Introspector, error) {
 	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.Logger)
@@ -148,24 +182,100 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, tokenIntrospectorPromSource)
 
+	// Building claims cache if needed.
+	var claimsCache IntrospectionClaimsCache = &disabledIntrospectionClaimsCache{}
+	if opts.ClaimsCache.Enabled {
+		if opts.ClaimsCache.TTL == 0 {
+			opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
+		}
+		if opts.ClaimsCache.MaxEntries == 0 {
+			opts.ClaimsCache.MaxEntries = DefaultIntrospectionClaimsCacheMaxEntries
+		}
+		cache, err := lrucache.New[[sha256.Size]byte, IntrospectionClaimsCacheItem](
+			opts.ClaimsCache.MaxEntries, promMetrics.TokenClaimsCache)
+		if err != nil {
+			return nil, err
+		}
+		claimsCache = &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionClaimsCacheItem]{cache}
+	}
+
+	// Building negative cache if needed.
+	var negativeCache IntrospectionNegativeCache = &disabledIntrospectionNegativeCache{}
+	if opts.NegativeCache.Enabled {
+		if opts.NegativeCache.TTL == 0 {
+			opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
+		}
+		if opts.NegativeCache.MaxEntries == 0 {
+			opts.NegativeCache.MaxEntries = DefaultIntrospectionNegativeCacheMaxEntries
+		}
+		cache, err := lrucache.New[[sha256.Size]byte, IntrospectionNegativeCacheItem](
+			opts.NegativeCache.MaxEntries, promMetrics.TokenNegativeCache)
+		if err != nil {
+			return nil, err
+		}
+		negativeCache = &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionNegativeCacheItem]{cache}
+	}
+
 	return &Introspector{
 		accessTokenProvider:           accessTokenProvider,
 		accessTokenScope:              opts.AccessTokenScope,
 		jwtParser:                     jwtgo.NewParser(),
 		logger:                        opts.Logger,
-		grpcClient:                    opts.GRPCClient,
+		GRPCClient:                    opts.GRPCClient,
 		httpClient:                    opts.HTTPClient,
+		httpEndpoint:                  opts.HTTPEndpoint,
 		scopeFilterFormURLEncoded:     scopeFilterFormURLEncoded,
 		scopeFilter:                   opts.ScopeFilter,
-		staticHTTPURL:                 opts.StaticHTTPEndpoint,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
 		promMetrics:                   promMetrics,
-	}
+		ClaimsCache:                   claimsCache,
+		claimsCacheTTL:                opts.ClaimsCache.TTL,
+		NegativeCache:                 negativeCache,
+		negativeCacheTTL:              opts.NegativeCache.TTL,
+	}, nil
 }
 
 // IntrospectToken introspects the given token.
 func (i *Introspector) IntrospectToken(ctx context.Context, token string) (IntrospectionResult, error) {
+	cacheKey := sha256.Sum256(
+		unsafe.Slice(unsafe.StringData(token), len(token))) // nolint:gosec // prevent redundant slice copying
+
+	if c, ok := i.ClaimsCache.Get(ctx, cacheKey); ok && c.CreatedAt.Add(i.claimsCacheTTL).After(time.Now()) {
+		return IntrospectionResult{Active: true, TokenType: c.TokenType, Claims: *c.Claims}, nil
+	}
+	if c, ok := i.NegativeCache.Get(ctx, cacheKey); ok && c.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
+		return IntrospectionResult{Active: false}, nil
+	}
+
+	introspectionResult, err := i.introspectToken(ctx, token)
+	if err != nil {
+		return IntrospectionResult{}, err
+	}
+	if introspectionResult.Active {
+		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionClaimsCacheItem{
+			Claims:    &introspectionResult.Claims,
+			TokenType: introspectionResult.TokenType,
+			CreatedAt: time.Now(),
+		})
+	} else {
+		i.NegativeCache.Add(ctx, cacheKey, IntrospectionNegativeCacheItem{CreatedAt: time.Now()})
+	}
+
+	return introspectionResult, nil
+}
+
+// AddTrustedIssuer adds trusted issuer with specified name and URL.
+func (i *Introspector) AddTrustedIssuer(issName, issURL string) {
+	i.trustedIssuerStore.AddTrustedIssuer(issName, issURL)
+}
+
+// AddTrustedIssuerURL adds trusted issuer URL.
+func (i *Introspector) AddTrustedIssuerURL(issURL string) error {
+	return i.trustedIssuerStore.AddTrustedIssuerURL(issURL)
+}
+
+func (i *Introspector) introspectToken(ctx context.Context, token string) (IntrospectionResult, error) {
 	introspectFn, err := i.makeIntrospectFuncForToken(ctx, token)
 	if err != nil {
 		return IntrospectionResult{}, err
@@ -176,7 +286,7 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		return result, nil
 	}
 
-	if !errors.Is(err, ErrTokenIntrospectionUnauthenticated) {
+	if !errors.Is(err, ErrUnauthenticated) {
 		return IntrospectionResult{}, err
 	}
 
@@ -191,23 +301,13 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 	return IntrospectionResult{}, err
 }
 
-// AddTrustedIssuer adds trusted issuer with specified name and URL.
-func (i *Introspector) AddTrustedIssuer(issName, issURL string) {
-	i.trustedIssuerStore.AddTrustedIssuer(issName, issURL)
-}
-
-// AddTrustedIssuerURL adds trusted issuer URL.
-func (i *Introspector) AddTrustedIssuerURL(issURL string) error {
-	return i.trustedIssuerStore.AddTrustedIssuerURL(issURL)
-}
-
 type introspectFunc func(ctx context.Context, token string) (IntrospectionResult, error)
 
 func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token string) (introspectFunc, error) {
 	var err error
 
 	if token == "" {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("token is missing"))
+		return nil, makeTokenNotIntrospectableError(fmt.Errorf("token is missing"))
 	}
 
 	jwtHeaderEndIdx := strings.IndexByte(token, '.')
@@ -224,17 +324,17 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	if err = headerDecoder.Decode(&jwtHeader); err != nil {
 		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("unmarshal JWT header: %w", err))
 	}
-	if typ, ok := jwtHeader["typ"].(string); !ok || !strings.EqualFold(typ, JWTTypeAccessToken) {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("token type is not %s", JWTTypeAccessToken))
+	if typ, ok := jwtHeader["typ"].(string); !ok || !strings.EqualFold(typ, idputil.JWTTypeAccessToken) {
+		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("token type is not %s", idputil.JWTTypeAccessToken))
 	}
 	if !checkIntrospectionRequiredByJWTHeader(jwtHeader) {
 		return nil, ErrTokenIntrospectionNotNeeded
 	}
 
-	if i.staticHTTPURL != "" {
-		return i.makeIntrospectFuncHTTP(i.staticHTTPURL), nil
+	if i.httpEndpoint != "" {
+		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
 	}
-	if i.grpcClient != nil {
+	if i.GRPCClient != nil {
 		return i.makeIntrospectFuncGRPC(), nil
 	}
 
@@ -278,11 +378,11 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 }
 
 func (i *Introspector) makeStaticIntrospectFuncOrError(inner error) (introspectFunc, error) {
-	if i.grpcClient != nil {
+	if i.GRPCClient != nil {
 		return i.makeIntrospectFuncGRPC(), nil
 	}
-	if i.staticHTTPURL != "" {
-		return i.makeIntrospectFuncHTTP(i.staticHTTPURL), nil
+	if i.httpEndpoint != "" {
+		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
 	}
 	return nil, makeTokenNotIntrospectableError(inner)
 }
@@ -321,7 +421,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
 			if resp.StatusCode == http.StatusUnauthorized {
-				return IntrospectionResult{}, ErrTokenIntrospectionUnauthenticated
+				return IntrospectionResult{}, ErrUnauthenticated
 			}
 			return IntrospectionResult{}, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
 		}
@@ -344,7 +444,7 @@ func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 		if err != nil {
 			return IntrospectionResult{}, fmt.Errorf("get access token for doing introspection: %w", err)
 		}
-		res, err := i.grpcClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
+		res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
 		if err != nil {
 			return IntrospectionResult{}, fmt.Errorf("introspect token: %w", err)
 		}
@@ -408,3 +508,67 @@ func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) boo
 	}
 	return true
 }
+
+type IntrospectionClaimsCacheItem struct {
+	Claims    *jwt.Claims
+	TokenType string
+	CreatedAt time.Time
+}
+
+type IntrospectionClaimsCache interface {
+	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionClaimsCacheItem, bool)
+	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionClaimsCacheItem)
+	Purge(ctx context.Context)
+	Len(ctx context.Context) int
+}
+
+type IntrospectionNegativeCacheItem struct {
+	CreatedAt time.Time
+}
+
+type IntrospectionNegativeCache interface {
+	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionNegativeCacheItem, bool)
+	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionNegativeCacheItem)
+	Purge(ctx context.Context)
+	Len(ctx context.Context) int
+}
+
+type IntrospectionLRUCache[K comparable, V any] struct {
+	cache *lrucache.LRUCache[K, V]
+}
+
+func (a *IntrospectionLRUCache[K, V]) Get(_ context.Context, key K) (V, bool) {
+	return a.cache.Get(key)
+}
+
+func (a *IntrospectionLRUCache[K, V]) Add(_ context.Context, key K, val V) {
+	a.cache.Add(key, val)
+}
+
+func (a *IntrospectionLRUCache[K, V]) Purge(ctx context.Context) {
+	a.cache.Purge()
+}
+
+func (a *IntrospectionLRUCache[K, V]) Len(ctx context.Context) int {
+	return a.cache.Len()
+}
+
+type disabledIntrospectionClaimsCache struct{}
+
+func (c *disabledIntrospectionClaimsCache) Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionClaimsCacheItem, bool) {
+	return IntrospectionClaimsCacheItem{}, false
+}
+func (c *disabledIntrospectionClaimsCache) Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionClaimsCacheItem) {
+}
+func (c *disabledIntrospectionClaimsCache) Purge(ctx context.Context)   {}
+func (c *disabledIntrospectionClaimsCache) Len(ctx context.Context) int { return 0 }
+
+type disabledIntrospectionNegativeCache struct{}
+
+func (c *disabledIntrospectionNegativeCache) Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionNegativeCacheItem, bool) {
+	return IntrospectionNegativeCacheItem{}, false
+}
+func (c *disabledIntrospectionNegativeCache) Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionNegativeCacheItem) {
+}
+func (c *disabledIntrospectionNegativeCache) Purge(ctx context.Context)   {}
+func (c *disabledIntrospectionNegativeCache) Len(ctx context.Context) int { return 0 }

@@ -12,10 +12,14 @@ import (
 	"net/http"
 	"net/url"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
+	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/idptoken/pb"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -28,6 +32,8 @@ type HTTPServerTokenIntrospectorMock struct {
 
 	introspectionResults map[[sha256.Size]byte]idptoken.IntrospectionResult
 	jwtScopes            map[string][]jwt.AccessPolicy
+
+	accessTokenForIntrospection string
 
 	Called                  bool
 	LastAuthorizationHeader string
@@ -50,6 +56,10 @@ func (m *HTTPServerTokenIntrospectorMock) SetScopeForJWTID(jwtID string, scope [
 	m.jwtScopes[jwtID] = scope
 }
 
+func (m *HTTPServerTokenIntrospectorMock) SetAccessTokenForIntrospection(accessToken string) {
+	m.accessTokenForIntrospection = accessToken
+}
+
 func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	r *http.Request, token string,
 ) (idptoken.IntrospectionResult, error) {
@@ -57,6 +67,10 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	m.LastAuthorizationHeader = r.Header.Get("Authorization")
 	m.LastIntrospectedToken = token
 	m.LastFormValues = r.Form
+
+	if m.LastAuthorizationHeader != "Bearer "+m.accessTokenForIntrospection {
+		return idptoken.IntrospectionResult{}, idptest.ErrUnauthorized
+	}
 
 	if result, ok := m.introspectionResults[tokenToKey(token)]; ok {
 		return result, nil
@@ -66,7 +80,7 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	if err != nil {
 		return idptoken.IntrospectionResult{Active: false}, nil
 	}
-	result := idptoken.IntrospectionResult{Active: true, TokenType: idptoken.TokenTypeBearer, Claims: *claims}
+	result := idptoken.IntrospectionResult{Active: true, TokenType: idputil.TokenTypeBearer, Claims: *claims}
 	if scopes, ok := m.jwtScopes[claims.ID]; ok {
 		result.Scope = scopes
 	}
@@ -85,6 +99,8 @@ type GRPCServerTokenIntrospectorMock struct {
 
 	introspectionResults map[[sha256.Size]byte]*pb.IntrospectTokenResponse
 	scopes               map[string][]*pb.AccessTokenScope
+
+	accessTokenForIntrospection string
 
 	Called                bool
 	LastAuthorizationMeta string
@@ -106,6 +122,10 @@ func (m *GRPCServerTokenIntrospectorMock) SetScopeForJWTID(jwtID string, scope [
 	m.scopes[jwtID] = scope
 }
 
+func (m *GRPCServerTokenIntrospectorMock) SetAccessTokenForIntrospection(accessToken string) {
+	m.accessTokenForIntrospection = accessToken
+}
+
 func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	ctx context.Context, req *pb.IntrospectTokenRequest,
 ) (*pb.IntrospectTokenResponse, error) {
@@ -117,6 +137,13 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	}
 	m.LastRequest = req
 
+	if m.LastAuthorizationMeta == "" {
+		return nil, status.Error(codes.Unauthenticated, "Access Token is missing")
+	}
+	if m.LastAuthorizationMeta != "Bearer "+m.accessTokenForIntrospection {
+		return nil, status.Error(codes.Unauthenticated, "Access Token is invalid")
+	}
+
 	if result, ok := m.introspectionResults[tokenToKey(req.Token)]; ok {
 		return result, nil
 	}
@@ -127,7 +154,7 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	}
 	result := &pb.IntrospectTokenResponse{
 		Active:          true,
-		TokenType:       idptoken.TokenTypeBearer,
+		TokenType:       idputil.TokenTypeBearer,
 		Exp:             claims.ExpiresAt.Unix(),
 		Aud:             claims.Audience,
 		Jti:             claims.ID,
