@@ -279,7 +279,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				Introspection: IntrospectionConfig{
 					Enabled: true,
 					GRPC: IntrospectionGRPCConfig{
-						Target: grpcIDPSrv.Addr(),
+						Endpoint: grpcIDPSrv.Addr(),
 						TLS: GRPCTLSConfig{
 							Enabled: true,
 							CACert:  certFile,

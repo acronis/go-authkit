@@ -134,12 +134,12 @@ func NewTokenIntrospector(
 	}
 
 	var grpcClient *idptoken.GRPCClient
-	if cfg.Introspection.GRPC.Target != "" {
+	if cfg.Introspection.GRPC.Endpoint != "" {
 		transportCreds, err := makeGRPCTransportCredentials(cfg.Introspection.GRPC.TLS)
 		if err != nil {
 			return nil, fmt.Errorf("make grpc transport credentials: %w", err)
 		}
-		grpcClient, err = idptoken.NewGRPCClientWithOpts(cfg.Introspection.GRPC.Target, transportCreds,
+		grpcClient, err = idptoken.NewGRPCClientWithOpts(cfg.Introspection.GRPC.Endpoint, transportCreds,
 			idptoken.GRPCClientOpts{RequestTimeout: cfg.GRPCClient.RequestTimeout, Logger: logger})
 		if err != nil {
 			return nil, fmt.Errorf("new grpc client: %w", err)

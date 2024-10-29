@@ -31,7 +31,7 @@ const (
 	cfgKeyJWKSCacheUpdateMinInterval           = "auth.jwks.cache.updateMinInterval"
 	cfgKeyIntrospectionEnabled                 = "auth.introspection.enabled"
 	cfgKeyIntrospectionEndpoint                = "auth.introspection.endpoint"
-	cfgKeyIntrospectionGRPCTarget              = "auth.introspection.grpc.target"
+	cfgKeyIntrospectionGRPCEndpoint            = "auth.introspection.grpc.endpoint"
 	cfgKeyIntrospectionGRPCTLSEnabled          = "auth.introspection.grpc.tls.enabled"
 	cfgKeyIntrospectionGRPCTLSCACert           = "auth.introspection.grpc.tls.caCert"
 	cfgKeyIntrospectionGRPCTLSClientCert       = "auth.introspection.grpc.tls.clientCert"
@@ -89,7 +89,7 @@ type IntrospectionCacheConfig struct {
 
 // IntrospectionGRPCConfig is a configuration of how token will be introspected via gRPC.
 type IntrospectionGRPCConfig struct {
-	Target         string
+	Endpoint       string
 	RequestTimeout time.Duration
 	TLS            GRPCTLSConfig
 }
@@ -231,7 +231,7 @@ func (c *Config) setIntrospectionConfig(dp config.DataProvider) error {
 	}
 
 	// GRPC
-	if c.Introspection.GRPC.Target, err = dp.GetString(cfgKeyIntrospectionGRPCTarget); err != nil {
+	if c.Introspection.GRPC.Endpoint, err = dp.GetString(cfgKeyIntrospectionGRPCEndpoint); err != nil {
 		return err
 	}
 	if c.Introspection.GRPC.TLS.Enabled, err = dp.GetBool(cfgKeyIntrospectionGRPCTLSEnabled); err != nil {
