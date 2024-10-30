@@ -135,6 +135,9 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 						log.Error(err))
 				}
 			default:
+				if logger != nil {
+					logger.Error("token introspection failed", log.Error(err))
+				}
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
 				return
