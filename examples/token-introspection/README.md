@@ -37,7 +37,7 @@ Service logs:
 $ curl -XPOST -u user:user-pwd 127.0.0.1:8081/idp/token
 {"access_token":"eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJ1c2VyIiwiZXhwIjoxNzI4Mjk0ODY5LCJqdGkiOiI0NzRhZTRiYS0wMDkyLTQwZmItOGY2MS02NGFjMWE5NTQwNjgifQ.mIDx9XuqRZmaWtshrSMGuzC2ONQDOqliwuiCctQVCS_a_U19mbs2pbSNJXVd8TmPb2abP7ANgaF9htyuJohdyaIcgFU92dK_ParunHH-qihkMwfTyUMMoQu4YQWSZhc8MBY5xQBb1LchV2uYxc1m402E1nvuXZY4FGbYxy8tdaTMMTJWBjStouMZ0meSDvwSP2mu7J8pCD4V3J6Um4gxtfaesovdyXahdlCwh34e0ey2_KcIuGR3QCOJYNRyEG2CYuMe5mfSrC5f0PkLpBY3G94pSJ_naf0qg4Xz-qmezA1KmAIqWUWXI1jS9UFTwuM4A7M0vPHbU3TXBcIW_yXoQw","expires_in":3600}
 
-$ curl -XPOST -H"Authorization: Bearer token-with-introspection-permission" 127.0.0.1:8081/idp/introspect_token -d token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJ1c2VyIiwiZXhwIjoxNzI4Mjk0ODY5LCJqdGkiOiI0NzRhZTRiYS0wMDkyLTQwZmItOGY2MS02NGFjMWE5NTQwNjgifQ.mIDx9XuqRZmaWtshrSMGuzC2ONQDOqliwuiCctQVCS_a_U19mbs2pbSNJXVd8TmPb2abP7ANgaF9htyuJohdyaIcgFU92dK_ParunHH-qihkMwfTyUMMoQu4YQWSZhc8MBY5xQBb1LchV2uYxc1m402E1nvuXZY4FGbYxy8tdaTMMTJWBjStouMZ0meSDvwSP2mu7J8pCD4V3J6Um4gxtfaesovdyXahdlCwh34e0ey2_KcIuGR3QCOJYNRyEG2CYuMe5mfSrC5f0PkLpBY3G94pSJ_naf0qg4Xz-qmezA1KmAIqWUWXI1jS9UFTwuM4A7M0vPHbU3TXBcIW_yXoQw
+$ curl -XPOST -H"Authorization: Bearer access-token-with-introspection-permission" 127.0.0.1:8081/idp/introspect_token -d token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJ1c2VyIiwiZXhwIjoxNzI4Mjk0ODY5LCJqdGkiOiI0NzRhZTRiYS0wMDkyLTQwZmItOGY2MS02NGFjMWE5NTQwNjgifQ.mIDx9XuqRZmaWtshrSMGuzC2ONQDOqliwuiCctQVCS_a_U19mbs2pbSNJXVd8TmPb2abP7ANgaF9htyuJohdyaIcgFU92dK_ParunHH-qihkMwfTyUMMoQu4YQWSZhc8MBY5xQBb1LchV2uYxc1m402E1nvuXZY4FGbYxy8tdaTMMTJWBjStouMZ0meSDvwSP2mu7J8pCD4V3J6Um4gxtfaesovdyXahdlCwh34e0ey2_KcIuGR3QCOJYNRyEG2CYuMe5mfSrC5f0PkLpBY3G94pSJ_naf0qg4Xz-qmezA1KmAIqWUWXI1jS9UFTwuM4A7M0vPHbU3TXBcIW_yXoQw
 {"active":true,"iss":"http://127.0.0.1:8081","sub":"user","exp":1728294869,"jti":"474ae4ba-0092-40fb-8f61-64ac1a954068"}
 
 $ curl 127.0.0.1:8080 -H"Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJ1c2VyIiwiZXhwIjoxNzI4Mjk0ODY5LCJqdGkiOiI0NzRhZTRiYS0wMDkyLTQwZmItOGY2MS02NGFjMWE5NTQwNjgifQ.mIDx9XuqRZmaWtshrSMGuzC2ONQDOqliwuiCctQVCS_a_U19mbs2pbSNJXVd8TmPb2abP7ANgaF9htyuJohdyaIcgFU92dK_ParunHH-qihkMwfTyUMMoQu4YQWSZhc8MBY5xQBb1LchV2uYxc1m402E1nvuXZY4FGbYxy8tdaTMMTJWBjStouMZ0meSDvwSP2mu7J8pCD4V3J6Um4gxtfaesovdyXahdlCwh34e0ey2_KcIuGR3QCOJYNRyEG2CYuMe5mfSrC5f0PkLpBY3G94pSJ_naf0qg4Xz-qmezA1KmAIqWUWXI1jS9UFTwuM4A7M0vPHbU3TXBcIW_yXoQw"
@@ -63,7 +63,7 @@ admin2's token has no access policies in the scope, but after introspection, the
 $ curl -XPOST -u admin2:admin2-pwd 127.0.0.1:8081/idp/token
 {"access_token":"eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJhZG1pbjIiLCJleHAiOjE3MjgyOTQ3MjksImp0aSI6ImZkY2QyMzRiLWJmMGEtNDgxNC1hNTIzLTg2MjZlNmI0MDA2YyJ9.ZCkklH8UtCnL6KLV1L1wimNEKJqCBPErzslNBu_Ox9Cahg590nl1TwdnOrIQgjvPTgRzk5hpiFEiXIsCY1uxtxTiWKtRqGPnKRnityvnQ7VMEc7Iwj-pKstoSr5qGBFbzWrn-4U-yD6xCXvj7DsKyTx-zYVGfbhRQXj8lDRIkfv9fTDfl3htZMKuwMi-fVavaOEJ4ZRGVIQSVd0ku_lXwB28hHP90n5MNmZPqAzcI-j-ribVcrfySe6bN8_7n4hmsk8YNFAPQaXsE5WA868LOKJTsVB4IZifIa7d107okjk8JTFuh-Vktkm8KW6H_TX6-UEWlM1kQKPqoXC5KlLecQ","expires_in":3600}
 
-$ curl -XPOST -H"Authorization: Bearer token-with-introspection-permission" 127.0.0.1:8081/idp/introspect_token -d token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJhZG1pbjIiLCJleHAiOjE3MjgyOTQ3MjksImp0aSI6ImZkY2QyMzRiLWJmMGEtNDgxNC1hNTIzLTg2MjZlNmI0MDA2YyJ9.ZCkklH8UtCnL6KLV1L1wimNEKJqCBPErzslNBu_Ox9Cahg590nl1TwdnOrIQgjvPTgRzk5hpiFEiXIsCY1uxtxTiWKtRqGPnKRnityvnQ7VMEc7Iwj-pKstoSr5qGBFbzWrn-4U-yD6xCXvj7DsKyTx-zYVGfbhRQXj8lDRIkfv9fTDfl3htZMKuwMi-fVavaOEJ4ZRGVIQSVd0ku_lXwB28hHP90n5MNmZPqAzcI-j-ribVcrfySe6bN8_7n4hmsk8YNFAPQaXsE5WA868LOKJTsVB4IZifIa7d107okjk8JTFuh-Vktkm8KW6H_TX6-UEWlM1kQKPqoXC5KlLecQ
+$ curl -XPOST -H"Authorization: Bearer access-token-with-introspection-permission" 127.0.0.1:8081/idp/introspect_token -d token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJhZG1pbjIiLCJleHAiOjE3MjgyOTQ3MjksImp0aSI6ImZkY2QyMzRiLWJmMGEtNDgxNC1hNTIzLTg2MjZlNmI0MDA2YyJ9.ZCkklH8UtCnL6KLV1L1wimNEKJqCBPErzslNBu_Ox9Cahg590nl1TwdnOrIQgjvPTgRzk5hpiFEiXIsCY1uxtxTiWKtRqGPnKRnityvnQ7VMEc7Iwj-pKstoSr5qGBFbzWrn-4U-yD6xCXvj7DsKyTx-zYVGfbhRQXj8lDRIkfv9fTDfl3htZMKuwMi-fVavaOEJ4ZRGVIQSVd0ku_lXwB28hHP90n5MNmZPqAzcI-j-ribVcrfySe6bN8_7n4hmsk8YNFAPQaXsE5WA868LOKJTsVB4IZifIa7d107okjk8JTFuh-Vktkm8KW6H_TX6-UEWlM1kQKPqoXC5KlLecQ
 {"active":true,"iss":"http://127.0.0.1:8081","sub":"admin2","exp":1728294729,"jti":"fdcd234b-bf0a-4814-a523-8626e6b4006c","scope":[{"rn":"my_service","role":"admin"}]}
 
 $ curl 127.0.0.1:8080/admin -H"Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImZhYzAxYzA3MGNkMDhiYTA4ODA5NzYyZGE2ZTRmNzRhZjE0ZTQ3OTAiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwODEiLCJzdWIiOiJhZG1pbjIiLCJleHAiOjE3MjgyOTQ3MjksImp0aSI6ImZkY2QyMzRiLWJmMGEtNDgxNC1hNTIzLTg2MjZlNmI0MDA2YyJ9.ZCkklH8UtCnL6KLV1L1wimNEKJqCBPErzslNBu_Ox9Cahg590nl1TwdnOrIQgjvPTgRzk5hpiFEiXIsCY1uxtxTiWKtRqGPnKRnityvnQ7VMEc7Iwj-pKstoSr5qGBFbzWrn-4U-yD6xCXvj7DsKyTx-zYVGfbhRQXj8lDRIkfv9fTDfl3htZMKuwMi-fVavaOEJ4ZRGVIQSVd0ku_lXwB28hHP90n5MNmZPqAzcI-j-ribVcrfySe6bN8_7n4hmsk8YNFAPQaXsE5WA868LOKJTsVB4IZifIa7d107okjk8JTFuh-Vktkm8KW6H_TX6-UEWlM1kQKPqoXC5KlLecQ"
@@ -86,8 +86,9 @@ But it can be configured statically as well. It could be useful in multiple case
 To configure the static introspection endpoint, add the following configuration to the `config.yaml` file:
 
 ```yaml
-introspection:
-  endpoint: <static_http_url>
+auth:
+  introspection:
+    endpoint: <static_http_url>
 ```
 
 Additionally, the introspection can be configured to use gRPC instead of HTTP for the introspection request.
@@ -95,14 +96,29 @@ If `grps.tls.enabled` is set to `true`, the introspection request will be made o
 If `grps.tls.client_cert` and `grps.tls.client_key` are set, the introspection request will be made with client authentication (mutual TLS).
 
 ```yaml
-introspection:
-  grpc:
-    target: <static_grpc_url>
-    tls:
-      enabled: true
-      caCert: <path_to_ca_cert>
-      clientCert: <path_to_client_cert>
-      clientKey: <path_to_client_key>
+auth:
+  introspection:
+    grpc:
+      target: <static_grpc_url>
+      tls:
+        enabled: true
+        caCert: <path_to_ca_cert>
+        clientCert: <path_to_client_cert>
+        clientKey: <path_to_client_key>
 ```
+
+If you want to test introspection via gRPC, you can use the [gRPC introspection server example](./grpc-server).
+To start the gRPC introspection server, just run `go run ./grpc-server/main.go`.
+
+Then modify the `config.yaml` file to use the gRPC introspection endpoint:
+
+```yaml
+auth:
+  introspection:
+    grpc:
+      endpoint: 127.0.0.1:50051
+```
+
+Now, the introspection request will be made to the gRPC server.
 
 Static endpoint configuration has higher priority than the dynamic one.
