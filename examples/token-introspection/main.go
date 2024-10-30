@@ -57,6 +57,7 @@ func runApp() error {
 		return fmt.Errorf("create token introspector: %w", err)
 	}
 	if tokenIntrospector.GRPCClient != nil {
+		logger.Info("introspection will be performed via gRPC")
 		defer func() {
 			if closeErr := tokenIntrospector.GRPCClient.Close(); closeErr != nil {
 				logger.Error("failed to close gRPC client", log.Error(closeErr))
@@ -120,7 +121,7 @@ type introspectionTokenProvider struct {
 }
 
 func (introspectionTokenProvider) GetToken(ctx context.Context, scope ...string) (string, error) {
-	return "token-with-introspection-permission", nil
+	return "access-token-with-introspection-permission", nil
 }
 
 func (introspectionTokenProvider) Invalidate() {}
