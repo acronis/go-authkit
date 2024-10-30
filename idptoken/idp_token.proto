@@ -39,7 +39,7 @@ message CreateTokenResponse {
 
 message IntrospectionScopeFilter {
   reserved 2 to 50;
-  string ResourceNamespace = 1;
+  string resource_namespace = 1;
 }
 
 message IntrospectTokenRequest {
@@ -52,10 +52,10 @@ message AccessTokenScope {
   reserved 7 to 50;
   string tenant_uuid = 1;
   int64 tenant_int_id = 2;
-  string ResourceServer = 3;
-  string ResourceNamespace = 4;
-  string ResourcePath = 5;
-  string RoleName = 6;
+  string resource_server = 3;
+  string resource_namespace = 4;
+  string resource_path = 5;
+  string role_name = 6;
 }
 
 message IntrospectTokenResponse {
