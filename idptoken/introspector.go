@@ -71,10 +71,13 @@ type IntrospectionTokenProvider interface {
 	Invalidate()
 }
 
-// IntrospectionScopeFilterAccessPolicy is an access policy for filtering scopes.
+// IntrospectionScopeFilterAccessPolicy is a single access policy for filtering scope during introspection.
 type IntrospectionScopeFilterAccessPolicy struct {
 	ResourceNamespace string
 }
+
+// IntrospectionScopeFilter is a filter for scope during introspection.
+type IntrospectionScopeFilter []IntrospectionScopeFilterAccessPolicy
 
 // IntrospectorOpts is a set of options for creating Introspector.
 type IntrospectorOpts struct {
@@ -96,9 +99,9 @@ type IntrospectorOpts struct {
 	// The token should have introspection permission.
 	AccessTokenScope []string
 
-	// ScopeFilter is a list of access policies for filtering scopes during introspection.
-	// If it is set, then only scopes that match at least one of the policies will be returned.
-	ScopeFilter []IntrospectionScopeFilterAccessPolicy
+	// ScopeFilter is a filter for scope during introspection.
+	// If it's set, then only access policies in scope that match at least one of the filtering policies will be returned.
+	ScopeFilter IntrospectionScopeFilter
 
 	// Logger is a logger for logging errors and debug information.
 	Logger log.FieldLogger
@@ -127,18 +130,29 @@ type IntrospectorCacheOpts struct {
 
 // Introspector is a struct for introspecting tokens.
 type Introspector struct {
+	// GRPCClient is a client for doing gRPC requests.
+	// If it is set, then introspection will be done via gRPC.
+	// Otherwise, introspection will be done via HTTP.
+	GRPCClient *GRPCClient
+
+	// HTTPClient is an HTTP client for doing requests.
+	HTTPClient *http.Client
+
+	// ClaimsCache is a cache for storing claims of introspected active tokens.
+	ClaimsCache IntrospectionClaimsCache
+
+	// NegativeCache is a cache for storing info about tokens that are not active.
+	NegativeCache IntrospectionNegativeCache
+
 	accessTokenProvider              IntrospectionTokenProvider
 	accessTokenProviderInvalidatedAt atomic.Value
 	accessTokenScope                 []string
 
 	jwtParser *jwtgo.Parser
 
-	GRPCClient *GRPCClient
-
 	httpEndpoint string
-	httpClient   *http.Client
 
-	scopeFilter               []IntrospectionScopeFilterAccessPolicy
+	scopeFilter               IntrospectionScopeFilter
 	scopeFilterFormURLEncoded string
 
 	logger log.FieldLogger
@@ -148,9 +162,7 @@ type Introspector struct {
 
 	promMetrics *metrics.PrometheusMetrics
 
-	ClaimsCache      IntrospectionClaimsCache
 	claimsCacheTTL   time.Duration
-	NegativeCache    IntrospectionNegativeCache
 	negativeCacheTTL time.Duration
 }
 
@@ -159,6 +171,30 @@ type IntrospectionResult struct {
 	Active    bool   `json:"active"`
 	TokenType string `json:"token_type,omitempty"`
 	jwt.Claims
+}
+
+// ApplyScopeFilter filters the scope of the introspection result
+// and preserves policies only that match the filter if it's not empty.
+// It's used just in case when the scope filtering is not done on the introspection endpoint side.
+func (ir *IntrospectionResult) ApplyScopeFilter(filter IntrospectionScopeFilter) {
+	if len(filter) == 0 {
+		return
+	}
+	n := 0
+	for j := range ir.Claims.Scope {
+		matched := false
+		for k := range filter {
+			if ir.Claims.Scope[j].ResourceNamespace == filter[k].ResourceNamespace {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			ir.Claims.Scope[n] = ir.Claims.Scope[j]
+			n++
+		}
+	}
+	ir.Claims.Scope = ir.Claims.Scope[:n]
 }
 
 // NewIntrospector creates a new Introspector with the given token provider.
@@ -222,7 +258,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		jwtParser:                     jwtgo.NewParser(),
 		logger:                        opts.Logger,
 		GRPCClient:                    opts.GRPCClient,
-		httpClient:                    opts.HTTPClient,
+		HTTPClient:                    opts.HTTPClient,
 		httpEndpoint:                  opts.HTTPEndpoint,
 		scopeFilterFormURLEncoded:     scopeFilterFormURLEncoded,
 		scopeFilter:                   opts.ScopeFilter,
@@ -241,11 +277,19 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 	cacheKey := sha256.Sum256(
 		unsafe.Slice(unsafe.StringData(token), len(token))) // nolint:gosec // prevent redundant slice copying
 
-	if c, ok := i.ClaimsCache.Get(ctx, cacheKey); ok && c.CreatedAt.Add(i.claimsCacheTTL).After(time.Now()) {
-		return IntrospectionResult{Active: true, TokenType: c.TokenType, Claims: *c.Claims}, nil
+	if cachedItem, ok := i.ClaimsCache.Get(ctx, cacheKey); ok {
+		now := time.Now()
+		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(now) &&
+			(cachedItem.Claims.ExpiresAt == nil || cachedItem.Claims.ExpiresAt.Time.After(now)) {
+			return IntrospectionResult{Active: true, TokenType: cachedItem.TokenType,
+				Claims: cloneClaims(cachedItem.Claims)}, nil
+		}
 	}
-	if c, ok := i.NegativeCache.Get(ctx, cacheKey); ok && c.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
-		return IntrospectionResult{Active: false}, nil
+
+	if c, ok := i.NegativeCache.Get(ctx, cacheKey); ok {
+		if c.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
+			return IntrospectionResult{Active: false}, nil
+		}
 	}
 
 	introspectionResult, err := i.introspectToken(ctx, token)
@@ -253,8 +297,10 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		return IntrospectionResult{}, err
 	}
 	if introspectionResult.Active {
+		introspectionResult.ApplyScopeFilter(i.scopeFilter)
+		claims := cloneClaims(&introspectionResult.Claims)
 		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionClaimsCacheItem{
-			Claims:    &introspectionResult.Claims,
+			Claims:    &claims,
 			TokenType: introspectionResult.TokenType,
 			CreatedAt: time.Now(),
 		})
@@ -290,7 +336,8 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 		return IntrospectionResult{}, err
 	}
 
-	// If introspection is unauthorized, then invalidate access token (if it is not invalidated recently) and try again.
+	// If introspection is unauthorized, then invalidate access token provider's cache and try again.
+	// To avoid invalidating the cache too often, we have a threshold - minimum interval between invalidations.
 	t, ok := i.accessTokenProviderInvalidatedAt.Load().(time.Time)
 	now := time.Now()
 	if !ok || now.Sub(t) > minAccessTokenProviderInvalidationInterval {
@@ -331,11 +378,13 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 		return nil, ErrTokenIntrospectionNotNeeded
 	}
 
-	if i.httpEndpoint != "" {
-		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
-	}
+	// Use preconfigured gRPC client or static HTTP endpoint for introspection if they are set.
+	// gRPC has higher priority than HTTP.
 	if i.GRPCClient != nil {
 		return i.makeIntrospectFuncGRPC(), nil
+	}
+	if i.httpEndpoint != "" {
+		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
 	}
 
 	// Try to get issuer from JWT header first and then from JWT payload.
@@ -405,7 +454,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 		startTime := time.Now()
-		resp, err := i.httpClient.Do(req.WithContext(ctx))
+		resp, err := i.HTTPClient.Do(req.WithContext(ctx))
 		elapsed := time.Since(startTime)
 		if err != nil {
 			i.promMetrics.ObserveHTTPClientRequest(http.MethodPost, introspectionEndpointURL, 0, elapsed, metrics.HTTPRequestErrorDo)
@@ -455,7 +504,7 @@ func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context, issuerURL string) (string, error) {
 	openIDCfgURL := strings.TrimSuffix(issuerURL, "/") + wellKnownPath
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
-		ctx, i.httpClient, openIDCfgURL, nil, i.logger, i.promMetrics)
+		ctx, i.HTTPClient, openIDCfgURL, nil, i.logger, i.promMetrics)
 	if err != nil {
 		return "", fmt.Errorf("get OpenID configuration: %w", err)
 	}
@@ -507,6 +556,45 @@ func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) boo
 		return iVal == 0
 	}
 	return true
+}
+
+// CloneClaims clones the given claims deeply.
+func cloneClaims(claims *jwt.Claims) jwt.Claims {
+	if claims == nil {
+		return jwt.Claims{}
+	}
+	newClaims := jwt.Claims{
+		RegisteredClaims: jwtgo.RegisteredClaims{
+			Issuer:  claims.Issuer,
+			Subject: claims.Subject,
+			ID:      claims.ID,
+		},
+		Version:         claims.Version,
+		UserID:          claims.UserID,
+		OriginID:        claims.OriginID,
+		ClientID:        claims.ClientID,
+		TOTPTime:        claims.TOTPTime,
+		SubType:         claims.SubType,
+		OwnerTenantUUID: claims.OwnerTenantUUID,
+	}
+	if len(claims.Scope) != 0 {
+		newClaims.Scope = make([]jwt.AccessPolicy, len(claims.Scope))
+		copy(newClaims.Scope, claims.Scope)
+	}
+	if len(claims.Audience) != 0 {
+		newClaims.Audience = make(jwtgo.ClaimStrings, len(claims.Audience))
+		copy(newClaims.Audience, claims.Audience)
+	}
+	if claims.ExpiresAt != nil {
+		newClaims.ExpiresAt = jwtgo.NewNumericDate(claims.ExpiresAt.Time)
+	}
+	if claims.NotBefore != nil {
+		newClaims.NotBefore = jwtgo.NewNumericDate(claims.NotBefore.Time)
+	}
+	if claims.IssuedAt != nil {
+		newClaims.IssuedAt = jwtgo.NewNumericDate(claims.IssuedAt.Time)
+	}
+	return newClaims
 }
 
 type IntrospectionClaimsCacheItem struct {
