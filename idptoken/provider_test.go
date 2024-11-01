@@ -151,7 +151,7 @@ func TestProviderWithCache(t *testing.T) {
 			context.Background(), testClientID, server.URL(), "tenants:read",
 		)
 		require.NoError(t, reissuedTokenErr)
-		require.Greater(t, reissuedToken, cachedToken, "token was not re-issued")
+		require.NotEqual(t, reissuedToken, cachedToken, "token was not re-issued")
 	})
 
 	t.Run("automatic refresh", func(t *testing.T) {
@@ -184,7 +184,7 @@ func TestProviderWithCache(t *testing.T) {
 			context.Background(), testClientID, server.URL(), "tenants:read",
 		)
 		require.NoError(t, refreshErr)
-		require.Greater(t, token, tokenOld, "token should have already been refreshed")
+		require.NotEqual(t, token, tokenOld, "token should have already been refreshed")
 	})
 
 	t.Run("invalidate", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestProviderWithCache(t *testing.T) {
 			context.Background(), testClientID, server.URL(), "tenants:read",
 		)
 		require.NoError(t, refreshErr)
-		require.Greater(t, token, tokenOld, "token should have already been refreshed")
+		require.NotEqual(t, token, tokenOld, "token should have already been refreshed")
 	})
 
 	t.Run("failing idp endpoint", func(t *testing.T) {

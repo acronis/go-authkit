@@ -18,8 +18,6 @@ import (
 
 	"github.com/acronis/go-appkit/httpserver/middleware"
 	"github.com/acronis/go-appkit/log"
-	jwtgo "github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 
 	"github.com/acronis/go-authkit"
 	"github.com/acronis/go-authkit/idptest"
@@ -47,7 +45,7 @@ func runApp() error {
 	idpSrv := idptest.NewHTTPServer(
 		idptest.WithHTTPAddress(idpAddr),
 		idptest.WithHTTPMiddleware(middleware.Logging(logger)),
-		idptest.WithHTTPClaimsProvider(&demoClaimsProvider{issuer: "http://" + idpAddr}),
+		idptest.WithHTTPClaimsProvider(&demoClaimsProvider{}),
 		idptest.WithHTTPTokenIntrospector(&demoTokenIntrospector{jwtParser: jwtParser}),
 	)
 	if err := idpSrv.StartAndWaitForReady(time.Second * 3); err != nil {
@@ -59,7 +57,10 @@ func runApp() error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	if stopErr := idpSrv.Shutdown(context.Background()); stopErr != nil && !errors.Is(stopErr, http.ErrServerClosed) {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer shutdownCancel()
+
+	if stopErr := idpSrv.Shutdown(shutdownCtx); stopErr != nil && !errors.Is(stopErr, http.ErrServerClosed) {
 		return stopErr
 	}
 	return nil
@@ -84,7 +85,6 @@ func (dti *demoTokenIntrospector) IntrospectToken(r *http.Request, token string)
 }
 
 type demoClaimsProvider struct {
-	issuer string
 }
 
 func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
@@ -104,8 +104,5 @@ func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
 	default:
 		return jwt.Claims{}, idptest.ErrUnauthorized
 	}
-	claims.Issuer = dcp.issuer
-	claims.ID = uuid.NewString()
-	claims.ExpiresAt = jwtgo.NewNumericDate(time.Now().Add(time.Hour))
 	return claims, nil
 }
