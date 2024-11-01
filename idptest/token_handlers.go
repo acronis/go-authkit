@@ -13,11 +13,19 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	jwtgo "github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
+	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/jwt"
 )
 
 // TokenHandler is an implementation of a handler responding with IDP token.
 type TokenHandler struct {
 	servedCount    atomic.Uint64
+	Issuer         string
 	ClaimsProvider HTTPClaimsProvider
 }
 
@@ -29,19 +37,26 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	h.servedCount.Add(1)
 
-	if h.ClaimsProvider == nil {
-		http.Error(rw, "ClaimsProvider for TokenHandler is not configured", http.StatusInternalServerError)
-		return
-	}
-
-	claims, err := h.ClaimsProvider.Provide(r)
-	if err != nil {
-		if errors.Is(err, ErrUnauthorized) {
-			http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+	var claims jwt.Claims
+	if h.ClaimsProvider != nil {
+		var err error
+		if claims, err = h.ClaimsProvider.Provide(r); err != nil {
+			if errors.Is(err, ErrUnauthorized) {
+				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
 			return
 		}
-		http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
-		return
+	}
+	if claims.ID == "" {
+		claims.ID = uuid.NewString()
+	}
+	if claims.ExpiresAt == nil {
+		claims.ExpiresAt = jwtgo.NewNumericDate(time.Now().Add(time.Hour)) // By default, token expires in 1 hour.
+	}
+	if claims.Issuer == "" {
+		claims.Issuer = h.Issuer
 	}
 
 	token, err := MakeTokenStringWithHeader(claims, TestKeyID, GetTestRSAPrivateKey(), nil)
@@ -55,11 +70,9 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		expiresIn = 0
 	}
 
-	response := struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-	}{
+	response := TokenResponse{
 		AccessToken: token,
+		TokenType:   idputil.TokenTypeBearer,
 		ExpiresIn:   expiresIn,
 	}
 	rw.Header().Set("Content-Type", "application/json")
@@ -74,8 +87,16 @@ func (h *TokenHandler) ServedCount() uint64 {
 	return h.servedCount.Load()
 }
 
+// TokenResponse is a response for POST /idp/token endpoint.
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int64  `json:"expires_in"`
+}
+
 type TokenIntrospectionHandler struct {
 	servedCount       atomic.Uint64
+	JWTParser         *jwt.Parser
 	TokenIntrospector HTTPTokenIntrospector
 }
 
@@ -87,8 +108,8 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 
 	h.servedCount.Add(1)
 
-	if h.TokenIntrospector == nil {
-		http.Error(rw, "HTTPTokenIntrospector for TokenIntrospectionHandler is not configured", http.StatusInternalServerError)
+	if h.TokenIntrospector == nil && h.JWTParser == nil {
+		http.Error(rw, "Token introspector and JWT parser are not set", http.StatusInternalServerError)
 		return
 	}
 
@@ -97,14 +118,24 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 		http.Error(rw, "Token is required", http.StatusBadRequest)
 		return
 	}
-	introspectResult, err := h.TokenIntrospector.IntrospectToken(r, token)
-	if err != nil {
-		if errors.Is(err, ErrUnauthorized) {
-			http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+
+	var introspectResult idptoken.IntrospectionResult
+	if h.TokenIntrospector != nil {
+		var err error
+		if introspectResult, err = h.TokenIntrospector.IntrospectToken(r, token); err != nil {
+			if errors.Is(err, ErrUnauthorized) {
+				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
 			return
 		}
-		http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
-		return
+	} else {
+		if claims, err := h.JWTParser.Parse(r.Context(), token); err == nil {
+			introspectResult.Active = true
+			introspectResult.TokenType = idputil.TokenTypeBearer
+			introspectResult.Claims = *claims
+		}
 	}
 
 	rw.Header().Set("Content-Type", "application/json")

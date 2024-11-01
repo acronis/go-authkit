@@ -45,7 +45,7 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	grpcServerTokenCreator.SetResultForToken(tokenV1, &pb.CreateTokenResponse{
 		AccessToken: tokenV2,
 		ExpiresIn:   int64(tokenExpiresIn.Seconds()),
-		TokenType:   "Bearer",
+		TokenType:   idputil.TokenTypeBearer,
 	})
 
 	grpcIDPSrv := idptest.NewGRPCServer(idptest.WithGRPCTokenCreator(grpcServerTokenCreator))
@@ -83,7 +83,7 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 			expectedTokenData: idptoken.TokenData{
 				AccessToken: tokenV2,
 				ExpiresIn:   tokenExpiresIn,
-				TokenType:   "Bearer",
+				TokenType:   idputil.TokenTypeBearer,
 			},
 		},
 	}

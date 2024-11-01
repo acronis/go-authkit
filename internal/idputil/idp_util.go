@@ -21,7 +21,7 @@ const GrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolin
 
 const JWTTypeAccessToken = "at+jwt"
 
-const TokenTypeBearer = "bearer"
+const TokenTypeBearer = "Bearer"
 
 const (
 	DefaultHTTPRequestTimeout          = 30 * time.Second

@@ -199,7 +199,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: tokenWithNamedIssuer,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    *claimsWithNamedIssuer,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
@@ -213,7 +213,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: token,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    *claims,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
@@ -230,7 +230,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: tokenWithNamedIssuer,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    *claimsWithNamedIssuer,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
@@ -247,7 +247,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: token,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    *claims,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
@@ -267,7 +267,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: opaqueToken,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    jwt.Claims{Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
@@ -293,7 +293,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			token: opaqueToken,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
-				TokenType: "bearer",
+				TokenType: idputil.TokenTypeBearer,
 				Claims:    jwt.Claims{Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {

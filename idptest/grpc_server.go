@@ -22,14 +22,35 @@ import (
 	"github.com/acronis/go-authkit/idptoken/pb"
 )
 
+// GRPCTokenCreator is an interface for creating tokens using gRPC.
 type GRPCTokenCreator interface {
 	CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error)
 }
 
+// GRPCTokenCreatorFunc is a function that implements GRPCTokenCreator interface.
+type GRPCTokenCreatorFunc func(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error)
+
+// CreateToken implements GRPCTokenCreator interface.
+func (f GRPCTokenCreatorFunc) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
+	return f(ctx, req)
+}
+
+// GRPCTokenIntrospector is an interface for introspecting tokens using gRPC.
 type GRPCTokenIntrospector interface {
 	IntrospectToken(ctx context.Context, req *pb.IntrospectTokenRequest) (*pb.IntrospectTokenResponse, error)
 }
 
+// GRPCTokenIntrospectorFunc is a function that implements GRPCTokenIntrospector interface.
+type GRPCTokenIntrospectorFunc func(ctx context.Context, req *pb.IntrospectTokenRequest) (*pb.IntrospectTokenResponse, error)
+
+// IntrospectToken implements GRPCTokenIntrospector interface.
+func (f GRPCTokenIntrospectorFunc) IntrospectToken(
+	ctx context.Context, req *pb.IntrospectTokenRequest,
+) (*pb.IntrospectTokenResponse, error) {
+	return f(ctx, req)
+}
+
+// GRPCServer is a gRPC server for IDP token service.
 type GRPCServer struct {
 	pb.UnimplementedIDPTokenServiceServer
 	*grpc.Server
@@ -39,26 +60,31 @@ type GRPCServer struct {
 	tokenCreator      GRPCTokenCreator
 }
 
+// GRPCServerOption is an option for GRPCServer.
 type GRPCServerOption func(*GRPCServer)
 
+// WithGRPCAddr is an option to set gRPC server address.
 func WithGRPCAddr(addr string) GRPCServerOption {
 	return func(server *GRPCServer) {
 		server.addr.Store(addr)
 	}
 }
 
+// WithGRPCServerOptions is an option to set gRPC server options.
 func WithGRPCServerOptions(opts ...grpc.ServerOption) GRPCServerOption {
 	return func(s *GRPCServer) {
 		s.serverOpts = opts
 	}
 }
 
+// WithGRPCTokenIntrospector is an option to set token introspector for the server.
 func WithGRPCTokenIntrospector(tokenIntrospector GRPCTokenIntrospector) GRPCServerOption {
 	return func(s *GRPCServer) {
 		s.tokenIntrospector = tokenIntrospector
 	}
 }
 
+// WithGRPCTokenCreator is an option to set token creator for the server.
 func WithGRPCTokenCreator(tokenCreator GRPCTokenCreator) GRPCServerOption {
 	return func(s *GRPCServer) {
 		s.tokenCreator = tokenCreator
@@ -109,6 +135,7 @@ func (s *GRPCServer) StartAndWaitForReady(timeout time.Duration) error {
 	return testutil.WaitListeningServer(s.Addr(), timeout)
 }
 
+// CreateToken is a gRPC method for creating tokens.
 func (s *GRPCServer) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
 	if s.tokenCreator != nil {
 		return s.tokenCreator.CreateToken(ctx, req)
@@ -116,6 +143,7 @@ func (s *GRPCServer) CreateToken(ctx context.Context, req *pb.CreateTokenRequest
 	return nil, status.Errorf(codes.Unimplemented, "method CreateToken not implemented")
 }
 
+// IntrospectToken is a gRPC method for introspecting tokens.
 func (s *GRPCServer) IntrospectToken(ctx context.Context, req *pb.IntrospectTokenRequest) (*pb.IntrospectTokenResponse, error) {
 	if s.tokenIntrospector != nil {
 		return s.tokenIntrospector.IntrospectToken(ctx, req)
