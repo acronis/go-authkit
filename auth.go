@@ -7,18 +7,21 @@ Released under MIT license.
 package authkit
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
 
+	"github.com/acronis/go-appkit/httpserver/middleware"
 	"github.com/acronis/go-appkit/log"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/libinfo"
 	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
 )
@@ -26,12 +29,10 @@ import (
 // NewJWTParser creates a new JWTParser with the given configuration.
 // If cfg.JWT.ClaimsCache.Enabled is true, then jwt.CachingParser created, otherwise - jwt.Parser.
 func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
-	var options jwtParserOptions
+	options := jwtParserOptions{loggerProvider: middleware.GetLoggerFromContext}
 	for _, opt := range opts {
 		opt(&options)
 	}
-
-	logger := idputil.PrepareLogger(options.logger)
 
 	// Make caching JWKS client.
 	jwksCacheUpdateMinInterval := cfg.JWKS.Cache.UpdateMinInterval
@@ -40,8 +41,8 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	}
 	jwksClientOpts := jwks.CachingClientOpts{
 		ClientOpts: jwks.ClientOpts{
-			Logger:                     logger,
-			HTTPClient:                 idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, logger),
+			LoggerProvider:             options.loggerProvider,
+			HTTPClient:                 idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider),
 			PrometheusLibInstanceLabel: options.prometheusLibInstanceLabel,
 		},
 		CacheUpdateMinInterval: jwksCacheUpdateMinInterval,
@@ -51,17 +52,19 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	// Make JWT parser.
 
 	if len(cfg.JWT.TrustedIssuers) == 0 && len(cfg.JWT.TrustedIssuerURLs) == 0 {
-		logger.Warn("list of trusted issuers is empty, jwt parsing may not work properly")
+		idputil.GetLoggerFromProvider(context.Background(), options.loggerProvider).Warn(
+			"list of trusted issuers is empty, jwt parsing may not work properly")
 	}
 
 	parserOpts := jwt.ParserOpts{
 		RequireAudience:               cfg.JWT.RequireAudience,
 		ExpectedAudience:              cfg.JWT.ExpectedAudience,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
+		LoggerProvider:                options.loggerProvider,
 	}
 
 	if cfg.JWT.ClaimsCache.Enabled {
-		cachingJWTParser, err := jwt.NewCachingParserWithOpts(jwksClient, logger, jwt.CachingParserOpts{
+		cachingJWTParser, err := jwt.NewCachingParserWithOpts(jwksClient, jwt.CachingParserOpts{
 			ParserOpts:      parserOpts,
 			CacheMaxEntries: cfg.JWT.ClaimsCache.MaxEntries,
 		})
@@ -74,7 +77,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 		return cachingJWTParser, nil
 	}
 
-	jwtParser := jwt.NewParserWithOpts(jwksClient, logger, parserOpts)
+	jwtParser := jwt.NewParserWithOpts(jwksClient, parserOpts)
 	if err := addTrustedIssuers(jwtParser, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
 		return nil, err
 	}
@@ -82,7 +85,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 }
 
 type jwtParserOptions struct {
-	logger                        log.FieldLogger
+	loggerProvider                func(ctx context.Context) log.FieldLogger
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback jwt.TrustedIssNotFoundFallback
 }
@@ -90,10 +93,10 @@ type jwtParserOptions struct {
 // JWTParserOption is an option for creating JWTParser.
 type JWTParserOption func(options *jwtParserOptions)
 
-// WithJWTParserLogger sets the logger for JWTParser.
-func WithJWTParserLogger(logger log.FieldLogger) JWTParserOption {
+// WithJWTParserLoggerProvider sets the logger provider for JWTParser.
+func WithJWTParserLoggerProvider(loggerProvider func(ctx context.Context) log.FieldLogger) JWTParserOption {
 	return func(options *jwtParserOptions) {
-		options.logger = logger
+		options.loggerProvider = loggerProvider
 	}
 }
 
@@ -122,15 +125,14 @@ func NewTokenIntrospector(
 	scopeFilter []idptoken.IntrospectionScopeFilterAccessPolicy,
 	opts ...TokenIntrospectorOption,
 ) (*idptoken.Introspector, error) {
-	var options tokenIntrospectorOptions
+	options := tokenIntrospectorOptions{loggerProvider: middleware.GetLoggerFromContext}
 	for _, opt := range opts {
 		opt(&options)
 	}
 
-	logger := idputil.PrepareLogger(options.logger)
-
 	if len(cfg.JWT.TrustedIssuers) == 0 && len(cfg.JWT.TrustedIssuerURLs) == 0 {
-		logger.Warn("list of trusted issuers is empty, jwt introspection may not work properly")
+		idputil.GetLoggerFromProvider(context.Background(), options.loggerProvider).Warn(
+			"list of trusted issuers is empty, jwt introspection may not work properly")
 	}
 
 	var grpcClient *idptoken.GRPCClient
@@ -139,9 +141,14 @@ func NewTokenIntrospector(
 		if err != nil {
 			return nil, fmt.Errorf("make grpc transport credentials: %w", err)
 		}
-		grpcClient, err = idptoken.NewGRPCClientWithOpts(cfg.Introspection.GRPC.Endpoint, transportCreds,
-			idptoken.GRPCClientOpts{RequestTimeout: cfg.GRPCClient.RequestTimeout, Logger: logger})
-		if err != nil {
+		grpcClientOpts := idptoken.GRPCClientOpts{
+			RequestTimeout: cfg.GRPCClient.RequestTimeout,
+			LoggerProvider: options.loggerProvider,
+			UserAgent:      libinfo.UserAgent(),
+		}
+		if grpcClient, err = idptoken.NewGRPCClientWithOpts(
+			cfg.Introspection.GRPC.Endpoint, transportCreds, grpcClientOpts,
+		); err != nil {
 			return nil, fmt.Errorf("new grpc client: %w", err)
 		}
 	}
@@ -149,9 +156,9 @@ func NewTokenIntrospector(
 	introspectorOpts := idptoken.IntrospectorOpts{
 		HTTPEndpoint:                  cfg.Introspection.Endpoint,
 		GRPCClient:                    grpcClient,
-		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, logger),
+		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider),
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
-		Logger:                        logger,
+		LoggerProvider:                options.loggerProvider,
 		ScopeFilter:                   scopeFilter,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		PrometheusLibInstanceLabel:    options.prometheusLibInstanceLabel,
@@ -179,7 +186,7 @@ func NewTokenIntrospector(
 }
 
 type tokenIntrospectorOptions struct {
-	logger                        log.FieldLogger
+	loggerProvider                func(ctx context.Context) log.FieldLogger
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback idptoken.TrustedIssNotFoundFallback
 }
@@ -187,10 +194,10 @@ type tokenIntrospectorOptions struct {
 // TokenIntrospectorOption is an option for creating TokenIntrospector.
 type TokenIntrospectorOption func(options *tokenIntrospectorOptions)
 
-// WithTokenIntrospectorLogger sets the logger for TokenIntrospector.
-func WithTokenIntrospectorLogger(logger log.FieldLogger) TokenIntrospectorOption {
+// WithTokenIntrospectorLoggerProvider sets the logger provider for TokenIntrospector.
+func WithTokenIntrospectorLoggerProvider(loggerProvider func(ctx context.Context) log.FieldLogger) TokenIntrospectorOption {
 	return func(options *tokenIntrospectorOptions) {
-		options.logger = logger
+		options.loggerProvider = loggerProvider
 	}
 }
 
@@ -240,6 +247,11 @@ func NewVerifyAccessByRolesInJWTMaker(namespace string) func(roleNames ...string
 		}
 		return NewVerifyAccessByRolesInJWT(roles...)
 	}
+}
+
+// SetDefaultLogger sets the default logger for the library.
+func SetDefaultLogger(logger log.FieldLogger) {
+	idputil.DefaultLogger = logger
 }
 
 type issuerParser interface {

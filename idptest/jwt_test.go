@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 
@@ -29,8 +28,6 @@ func TestMakeTokenStringWithHeader(t *testing.T) {
 	issuerConfigServer := httptest.NewServer(&OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 	defer issuerConfigServer.Close()
 
-	logger := log.NewDisabledLogger()
-
 	jwtClaims := &jwt.Claims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
@@ -41,7 +38,7 @@ func TestMakeTokenStringWithHeader(t *testing.T) {
 		},
 	}
 
-	parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+	parser := jwt.NewParser(jwks.NewCachingClient())
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 	parsedClaims, err := parser.Parse(context.Background(), MustMakeTokenStringSignedWithTestKey(jwtClaims))
 	require.NoError(t, err)

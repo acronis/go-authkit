@@ -39,20 +39,19 @@ func runApp() error {
 	logger, loggerClose := log.NewLogger(cfg.Log)
 	defer loggerClose()
 
-	jwtParser, err := authkit.NewJWTParser(cfg.Auth, authkit.WithJWTParserLogger(logger))
+	jwtParser, err := authkit.NewJWTParser(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("create JWT parser: %w", err)
 	}
 
-	logMw := middleware.Logging(logger)
 	authNMw := authkit.JWTAuthMiddleware(serviceErrorDomain, jwtParser)
 
 	srvMux := http.NewServeMux()
-	srvMux.Handle("/", logMw(authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	srvMux.Handle("/", authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", jwtClaims.Subject)))
-	}))))
-	if err = http.ListenAndServe(":8080", srvMux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	})))
+	if err = http.ListenAndServe(":8080", middleware.Logging(logger)(srvMux)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)
 	}
 

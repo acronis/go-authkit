@@ -103,8 +103,8 @@ type IntrospectorOpts struct {
 	// If it's set, then only access policies in scope that match at least one of the filtering policies will be returned.
 	ScopeFilter IntrospectionScopeFilter
 
-	// Logger is a logger for logging errors and debug information.
-	Logger log.FieldLogger
+	// LoggerProvider is a function that provides a logger for the Introspector.
+	LoggerProvider func(ctx context.Context) log.FieldLogger
 
 	// TrustedIssuerNotFoundFallback is a function called
 	// when given issuer from JWT is not found in the list of trusted ones.
@@ -155,7 +155,7 @@ type Introspector struct {
 	scopeFilter               IntrospectionScopeFilter
 	scopeFilterFormURLEncoded string
 
-	logger log.FieldLogger
+	loggerProvider func(ctx context.Context) log.FieldLogger
 
 	trustedIssuerStore            *idputil.TrustedIssuerStore
 	trustedIssuerNotFoundFallback TrustedIssNotFoundFallback
@@ -205,9 +205,8 @@ func NewIntrospector(tokenProvider IntrospectionTokenProvider) (*Introspector, e
 // NewIntrospectorWithOpts creates a new Introspector with the given token provider and options.
 // See IntrospectorOpts for more details.
 func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opts IntrospectorOpts) (*Introspector, error) {
-	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.Logger)
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider)
 	}
 
 	values := url.Values{}
@@ -256,7 +255,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		accessTokenProvider:           accessTokenProvider,
 		accessTokenScope:              opts.AccessTokenScope,
 		jwtParser:                     jwtgo.NewParser(),
-		logger:                        opts.Logger,
+		loggerProvider:                opts.LoggerProvider,
 		GRPCClient:                    opts.GRPCClient,
 		HTTPClient:                    opts.HTTPClient,
 		httpEndpoint:                  opts.HTTPEndpoint,
@@ -462,7 +461,8 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		}
 		defer func() {
 			if closeBodyErr := resp.Body.Close(); closeBodyErr != nil {
-				i.logger.Error(fmt.Sprintf("closing response body error for POST %s", introspectionEndpointURL),
+				idputil.GetLoggerFromProvider(ctx, i.loggerProvider).Error(
+					fmt.Sprintf("closing response body error for POST %s", introspectionEndpointURL),
 					log.Error(closeBodyErr))
 			}
 		}()
@@ -502,9 +502,10 @@ func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 }
 
 func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context, issuerURL string) (string, error) {
+	logger := idputil.GetLoggerFromProvider(ctx, i.loggerProvider)
 	openIDCfgURL := strings.TrimSuffix(issuerURL, "/") + wellKnownPath
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
-		ctx, i.HTTPClient, openIDCfgURL, nil, i.logger, i.promMetrics)
+		ctx, i.HTTPClient, openIDCfgURL, nil, logger, i.promMetrics)
 	if err != nil {
 		return "", fmt.Errorf("get OpenID configuration: %w", err)
 	}

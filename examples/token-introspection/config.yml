@@ -20,4 +20,4 @@ auth:
       maxEntries: 1000
       ttl: 5m
     grpc:
-      endpoint: 127.0.0.1:50051
+      endpoint: ""

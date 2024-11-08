@@ -36,6 +36,7 @@ type ParserOpts struct {
 	RequireAudience               bool
 	ExpectedAudience              []string
 	TrustedIssuerNotFoundFallback TrustedIssNotFoundFallback
+	LoggerProvider                func(ctx context.Context) log.FieldLogger
 }
 
 type audienceMatcher func(aud string) bool
@@ -55,16 +56,16 @@ type Parser struct {
 	trustedIssuerStore            *idputil.TrustedIssuerStore
 	trustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 
-	logger log.FieldLogger
+	loggerProvider func(ctx context.Context) log.FieldLogger
 }
 
 // NewParser creates new JWT parser with specified keys provider.
-func NewParser(keysProvider KeysProvider, logger log.FieldLogger) *Parser {
-	return NewParserWithOpts(keysProvider, logger, ParserOpts{})
+func NewParser(keysProvider KeysProvider) *Parser {
+	return NewParserWithOpts(keysProvider, ParserOpts{})
 }
 
 // NewParserWithOpts creates new JWT parser with specified keys provider and additional options.
-func NewParserWithOpts(keysProvider KeysProvider, logger log.FieldLogger, opts ParserOpts) *Parser {
+func NewParserWithOpts(keysProvider KeysProvider, opts ParserOpts) *Parser {
 	var audienceMatchers []audienceMatcher
 	for _, audPattern := range opts.ExpectedAudience {
 		audienceMatchers = append(audienceMatchers, glob.Compile(audPattern))
@@ -81,7 +82,7 @@ func NewParserWithOpts(keysProvider KeysProvider, logger log.FieldLogger, opts P
 		keysProvider:                  keysProvider,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
-		logger:                        logger,
+		loggerProvider:                opts.LoggerProvider,
 	}
 }
 
@@ -120,7 +121,8 @@ func (p *Parser) Parse(ctx context.Context, token string) (*Claims, error) {
 			return nil, err
 		}
 		if err = cachingKeysProvider.InvalidateCacheIfNeeded(ctx, issuerURL); err != nil {
-			p.logger.Error(fmt.Sprintf("keys provider invalidating cache error for issuer %q", issuerURL),
+			idputil.GetLoggerFromProvider(ctx, p.loggerProvider).Error(
+				fmt.Sprintf("keys provider invalidating cache error for issuer %q", issuerURL),
 				log.Error(err))
 			return nil, err
 		}

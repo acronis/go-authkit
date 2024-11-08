@@ -34,11 +34,14 @@ const grpcMetaAuthorization = "authorization"
 
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
-	// Logger is a logger for the client.
-	Logger log.FieldLogger
+	// LoggerProvider is a function that provides a logger for the client.
+	LoggerProvider func(ctx context.Context) log.FieldLogger
 
 	// RequestTimeout is a timeout for the gRPC requests.
 	RequestTimeout time.Duration
+
+	// UserAgent is a user agent string for the client.
+	UserAgent string
 
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
@@ -65,14 +68,14 @@ func NewGRPCClient(
 func NewGRPCClientWithOpts(
 	target string, transportCreds credentials.TransportCredentials, opts GRPCClientOpts,
 ) (*GRPCClient, error) {
-	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = DefaultGRPCClientRequestTimeout
 	}
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(transportCreds),
-		grpc.WithStatsHandler(&statsHandler{logger: opts.Logger}),
+		grpc.WithStatsHandler(&statsHandler{loggerProvider: opts.LoggerProvider}),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		grpc.WithUserAgent(opts.UserAgent),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial to %q: %w", target, err)
@@ -207,7 +210,7 @@ func (c *GRPCClient) do(ctx context.Context, methodName string, call func(ctx co
 }
 
 type statsHandler struct {
-	logger log.FieldLogger
+	loggerProvider func(ctx context.Context) log.FieldLogger
 }
 
 func (sh *statsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
@@ -224,8 +227,8 @@ func (sh *statsHandler) TagConn(ctx context.Context, info *stats.ConnTagInfo) co
 func (sh *statsHandler) HandleConn(ctx context.Context, s stats.ConnStats) {
 	switch s.(type) {
 	case *stats.ConnBegin:
-		sh.logger.Infof("grpc connection established")
+		idputil.GetLoggerFromProvider(ctx, sh.loggerProvider).Infof("grpc connection established")
 	case *stats.ConnEnd:
-		sh.logger.Infof("grpc connection closed")
+		idputil.GetLoggerFromProvider(ctx, sh.loggerProvider).Infof("grpc connection closed")
 	}
 }

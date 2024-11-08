@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	golog "log"
 	"net/http"
 	"os"
@@ -22,7 +23,6 @@ import (
 	"github.com/acronis/go-authkit"
 	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken"
-	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -38,9 +38,11 @@ func runApp() error {
 	logger, loggerClose := log.NewLogger(&log.Config{Output: log.OutputStdout, Level: log.LevelInfo, Format: log.FormatJSON})
 	defer loggerClose()
 
-	jwksClientOpts := jwks.CachingClientOpts{ClientOpts: jwks.ClientOpts{Logger: logger}}
-	jwtParser := jwt.NewParser(jwks.NewCachingClientWithOpts(jwksClientOpts), logger)
-	_ = jwtParser.AddTrustedIssuerURL("http://" + idpAddr)
+	jwtParser, err := authkit.NewJWTParser(
+		&authkit.Config{JWT: authkit.JWTConfig{TrustedIssuerURLs: []string{"http://" + idpAddr}}})
+	if err != nil {
+		return fmt.Errorf("create JWT parser: %w", err)
+	}
 
 	idpSrv := idptest.NewHTTPServer(
 		idptest.WithHTTPAddress(idpAddr),
@@ -48,8 +50,8 @@ func runApp() error {
 		idptest.WithHTTPClaimsProvider(&demoClaimsProvider{}),
 		idptest.WithHTTPTokenIntrospector(&demoTokenIntrospector{jwtParser: jwtParser}),
 	)
-	if err := idpSrv.StartAndWaitForReady(time.Second * 3); err != nil {
-		return err
+	if err = idpSrv.StartAndWaitForReady(time.Second * 3); err != nil {
+		return fmt.Errorf("start HTTP server: %w", err)
 	}
 	logger.Info("HTTP IDP server is running on " + idpAddr)
 
@@ -61,13 +63,13 @@ func runApp() error {
 	defer shutdownCancel()
 
 	if stopErr := idpSrv.Shutdown(shutdownCtx); stopErr != nil && !errors.Is(stopErr, http.ErrServerClosed) {
-		return stopErr
+		return fmt.Errorf("shutdown HTTP server: %w", stopErr)
 	}
 	return nil
 }
 
 type demoTokenIntrospector struct {
-	jwtParser *jwt.Parser
+	jwtParser authkit.JWTParser
 }
 
 func (dti *demoTokenIntrospector) IntrospectToken(r *http.Request, token string) (idptoken.IntrospectionResult, error) {

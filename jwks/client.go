@@ -34,8 +34,8 @@ type ClientOpts struct {
 	// HTTPClient is an HTTP client for making requests.
 	HTTPClient *http.Client
 
-	// Logger is a logger for the client.
-	Logger log.FieldLogger
+	// LoggerProvider is a function that provides a logger for the Client.
+	LoggerProvider func(ctx context.Context) log.FieldLogger
 
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
@@ -47,9 +47,9 @@ type ClientOpts struct {
 // NOTE: CachingClient should be used in a typical service
 // to avoid making HTTP requests on each JWT verification.
 type Client struct {
-	httpClient  *http.Client
-	logger      log.FieldLogger
-	promMetrics *metrics.PrometheusMetrics
+	httpClient     *http.Client
+	loggerProvider func(ctx context.Context) log.FieldLogger
+	promMetrics    *metrics.PrometheusMetrics
 }
 
 // NewClient returns a new Client.
@@ -60,37 +60,38 @@ func NewClient() *Client {
 // NewClientWithOpts returns a new Client with options.
 func NewClientWithOpts(opts ClientOpts) *Client {
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "jwks_client")
-	opts.Logger = idputil.PrepareLogger(opts.Logger)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.Logger)
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider)
 	}
-	return &Client{httpClient: opts.HTTPClient, logger: opts.Logger, promMetrics: promMetrics}
+	return &Client{httpClient: opts.HTTPClient, loggerProvider: opts.LoggerProvider, promMetrics: promMetrics}
 }
 
 func (c *Client) getRSAPubKeysForIssuer(ctx context.Context, issuerURL string) (map[string]interface{}, error) {
+	logger := idputil.GetLoggerFromProvider(ctx, c.loggerProvider)
+
 	openIDConfigURL := strings.TrimPrefix(issuerURL, "/") + OpenIDConfigurationPath
 	openIDConfig, err := idputil.GetOpenIDConfiguration(
-		ctx, c.httpClient, openIDConfigURL, nil, c.logger, c.promMetrics)
+		ctx, c.httpClient, openIDConfigURL, nil, logger, c.promMetrics)
 	if err != nil {
 		return nil, &GetOpenIDConfigurationError{Inner: err, URL: openIDConfigURL}
 	}
-	jwksRespData, err := c.getJWKS(ctx, openIDConfig.JWKSURI)
+	jwksRespData, err := c.getJWKS(ctx, openIDConfig.JWKSURI, logger)
 	if err != nil {
 		return nil, &GetJWKSError{Inner: err, URL: openIDConfig.JWKSURI, OpenIDConfigurationURL: openIDConfigURL}
 	}
-	c.logger.Info(fmt.Sprintf("%d keys fetched (jwks_url: %s)", len(jwksRespData.Keys), openIDConfig.JWKSURI))
+	logger.Info(fmt.Sprintf("%d keys fetched (jwks_url: %s)", len(jwksRespData.Keys), openIDConfig.JWKSURI))
 
 	pubKeys := make(map[string]interface{}, len(jwksRespData.Keys))
 	for _, jwk := range jwksRespData.Keys {
 		var pubKey crypto.PublicKey
 		if pubKey, err = jwk.DecodePublicKey(); err != nil {
-			c.logger.Error(fmt.Sprintf("decoding JWK (kid: %s, jwks_url: %s) to public key error",
+			logger.Error(fmt.Sprintf("decoding JWK (kid: %s, jwks_url: %s) to public key error",
 				jwk.Kid, openIDConfig.JWKSURI), log.Error(err))
 			continue
 		}
 		rsaPubKey, ok := pubKey.(*rsa.PublicKey)
 		if !ok {
-			c.logger.Error(fmt.Sprintf("converting JWK (kid: %s, jwks_url: %s) to RSA public key error",
+			logger.Error(fmt.Sprintf("converting JWK (kid: %s, jwks_url: %s) to RSA public key error",
 				jwk.Kid, openIDConfig.JWKSURI), log.Error(err))
 			continue
 		}
@@ -112,7 +113,7 @@ func (c *Client) GetRSAPublicKey(ctx context.Context, issuerURL, keyID string) (
 	return pubKey, nil
 }
 
-func (c *Client) getJWKS(ctx context.Context, jwksURL string) (jwksData, error) {
+func (c *Client) getJWKS(ctx context.Context, jwksURL string, logger log.FieldLogger) (jwksData, error) {
 	req, err := http.NewRequest(http.MethodGet, jwksURL, http.NoBody)
 	if err != nil {
 		return jwksData{}, fmt.Errorf("new request: %w", err)
@@ -126,7 +127,7 @@ func (c *Client) getJWKS(ctx context.Context, jwksURL string) (jwksData, error) 
 	}
 	defer func() {
 		if closeBodyErr := resp.Body.Close(); closeBodyErr != nil {
-			c.logger.Error(fmt.Sprintf("closing response body error for GET %s", jwksURL), log.Error(closeBodyErr))
+			logger.Error(fmt.Sprintf("closing response body error for GET %s", jwksURL), log.Error(closeBodyErr))
 		}
 	}()
 

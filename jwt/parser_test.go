@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 
@@ -30,8 +29,6 @@ func TestJWTParser_Parse(t *testing.T) {
 	issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 	defer issuerConfigServer.Close()
 
-	logger := log.NewDisabledLogger()
-
 	t.Run("ok", func(t *testing.T) {
 		claims := &jwt.Claims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
@@ -42,7 +39,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			TOTPTime: time.Now().Unix(),
 			SubType:  "task_manager",
 		}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		parsedClaims, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.NoError(t, err)
@@ -58,7 +55,7 @@ func TestJWTParser_Parse(t *testing.T) {
 				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
 			},
 		}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		parsedClaims, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.NoError(t, err)
@@ -79,7 +76,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			"http://127.*",
 		}
 		for _, issURL := range issURLs {
-			parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+			parser := jwt.NewParser(jwks.NewCachingClient())
 			require.NoError(t, parser.AddTrustedIssuerURL(issURL))
 			parsedClaims, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 			require.NoError(t, err)
@@ -97,7 +94,7 @@ func TestJWTParser_Parse(t *testing.T) {
 				},
 				Scope: []jwt.AccessPolicy{{Role: "company_admin"}},
 			}
-			parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), logger, jwt.ParserOpts{
+			parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), jwt.ParserOpts{
 				ExpectedAudience: []string{"*.cloud.com"},
 			})
 			require.NoError(t, parser.AddTrustedIssuerURL(issuerConfigServer.URL))
@@ -108,7 +105,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	})
 
 	t.Run("malformed jwt", func(t *testing.T) {
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		_, err := parser.Parse(context.Background(), "invalid-jwt")
 		require.ErrorIs(t, err, jwtgo.ErrTokenMalformed)
 		require.ErrorContains(t, err, "token contains an invalid number of segments")
@@ -126,7 +123,7 @@ func TestJWTParser_Parse(t *testing.T) {
 		tokenString, err := token.SignedString(jwtgo.UnsafeAllowNoneSignatureType)
 		require.NoError(t, err)
 
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		_, err = parser.Parse(context.Background(), tokenString)
 		require.ErrorIs(t, err, jwtgo.NoneSignatureTypeDisallowedError)
 	})
@@ -135,7 +132,7 @@ func TestJWTParser_Parse(t *testing.T) {
 		claims := &jwt.Claims{
 			RegisteredClaims: jwtgo.RegisteredClaims{Audience: []string{"https://cloud.acronis.com"}},
 		}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenUnverifiable)
 		var issMissingErr *jwt.IssuerMissingError
@@ -146,7 +143,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	t.Run("jwt has untrusted issuer", func(t *testing.T) {
 		const issuer = "untrusted-issuer"
 		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenUnverifiable)
 		var issUntrustedErr *jwt.IssuerUntrustedError
@@ -157,7 +154,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	t.Run("jwt has untrusted issuer url", func(t *testing.T) {
 		const issuer = "https://3rd-party-idp.com"
 		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		require.NoError(t, parser.AddTrustedIssuerURL("https://*.acronis.com"))
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenUnverifiable)
@@ -176,7 +173,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			},
 			Scope: []jwt.AccessPolicy{{Role: "company_admin"}},
 		}
-		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), logger, jwt.ParserOpts{
+		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), jwt.ParserOpts{
 			TrustedIssuerNotFoundFallback: func(ctx context.Context, p *jwt.Parser, iss string) (issURL string, issFound bool) {
 				callbackCallCount++
 				addErr := p.AddTrustedIssuerURL(iss)
@@ -199,7 +196,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("jwt exp is missing", func(t *testing.T) {
 		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss}}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
@@ -209,7 +206,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	t.Run("jwt expired", func(t *testing.T) {
 		expiresAt := time.Now().Add(-time.Second)
 		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(expiresAt)}}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
@@ -223,7 +220,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
 			NotBefore: jwtgo.NewNumericDate(notBefore),
 		}}
-		parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
@@ -235,7 +232,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
 		}}
-		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), logger, jwt.ParserOpts{
+		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), jwt.ParserOpts{
 			RequireAudience: true,
 		})
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
@@ -254,7 +251,7 @@ func TestJWTParser_Parse(t *testing.T) {
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
 		}}
-		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), logger, jwt.ParserOpts{
+		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), jwt.ParserOpts{
 			ExpectedAudience: []string{"expected-audience"},
 		})
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
@@ -280,7 +277,7 @@ func TestJWTParser_Parse(t *testing.T) {
 		tokenString, err := idptest.MakeTokenString(claims, "737c5114f09b5ed05276bd4b520245982f7fb29f", idptest.GetTestRSAPrivateKey())
 		require.NoError(t, err)
 		jwksClient := jwks.NewCachingClientWithOpts(jwks.CachingClientOpts{CacheUpdateMinInterval: cacheUpdateMinInterval})
-		parser := jwt.NewParser(jwksClient, logger)
+		parser := jwt.NewParser(jwksClient)
 		parser.AddTrustedIssuer(testIss, openIDCfgServer2.URL)
 
 		for i := 0; i < 2; i++ {
@@ -335,8 +332,7 @@ func TestParser_getURLForIssuer(t *testing.T) {
 	for i := range tests {
 		tt := tests[i]
 		t.Run(tt.Name, func(t *testing.T) {
-			logger := log.NewDisabledLogger()
-			parser := jwt.NewParser(jwks.NewCachingClient(), logger)
+			parser := jwt.NewParser(jwks.NewCachingClient())
 			require.NoError(t, parser.AddTrustedIssuerURL(tt.IssURLPattern))
 			for _, issURL := range tt.TrustedIssURLs {
 				u, ok := parser.GetURLForIssuer(issURL)
