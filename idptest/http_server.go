@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	"github.com/acronis/go-appkit/testutil"
 
 	"github.com/acronis/go-authkit/idptoken"
@@ -258,7 +257,7 @@ func (s *HTTPServer) StartAndWaitForReady(timeout time.Duration) error {
 }
 
 func (s *HTTPServer) makeJWTParser() *jwt.Parser {
-	p := jwt.NewParser(jwks.NewClient(), log.NewDisabledLogger())
+	p := jwt.NewParser(jwks.NewClient())
 	_ = p.AddTrustedIssuerURL(s.URL())
 	return p
 }

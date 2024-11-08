@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	golog "log"
 	"os"
 	"os/signal"
@@ -17,9 +18,9 @@ import (
 	"github.com/acronis/go-appkit/log"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/acronis/go-authkit"
 	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken/pb"
-	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -38,15 +39,17 @@ func runApp() error {
 	logger, loggerClose := log.NewLogger(&log.Config{Output: log.OutputStdout, Level: log.LevelInfo, Format: log.FormatJSON})
 	defer loggerClose()
 
-	jwksClientOpts := jwks.CachingClientOpts{ClientOpts: jwks.ClientOpts{Logger: logger}}
-	jwtParser := jwt.NewParser(jwks.NewCachingClientWithOpts(jwksClientOpts), logger)
-	_ = jwtParser.AddTrustedIssuerURL("http://" + idpAddr)
+	jwtParser, err := authkit.NewJWTParser(
+		&authkit.Config{JWT: authkit.JWTConfig{TrustedIssuerURLs: []string{"http://" + idpAddr}}})
+	if err != nil {
+		return fmt.Errorf("create JWT parser: %w", err)
+	}
 
 	grpcSrv := idptest.NewGRPCServer(
 		idptest.WithGRPCAddr(grpcAddr),
 		idptest.WithGRPCTokenIntrospector(&demoGRPCTokenIntrospector{jwtParser: jwtParser, logger: logger}),
 	)
-	if err := grpcSrv.StartAndWaitForReady(time.Second * 3); err != nil {
+	if err = grpcSrv.StartAndWaitForReady(time.Second * 3); err != nil {
 		return err
 	}
 	logger.Info("GRPC server for token introspection is running on " + grpcAddr)
@@ -62,18 +65,26 @@ func runApp() error {
 const accessTokenWithIntrospectionPermission = "access-token-with-introspection-permission"
 
 type demoGRPCTokenIntrospector struct {
-	jwtParser *jwt.Parser
+	jwtParser authkit.JWTParser
 	logger    log.FieldLogger
 }
 
 func (dti *demoGRPCTokenIntrospector) IntrospectToken(
 	ctx context.Context, req *pb.IntrospectTokenRequest,
 ) (*pb.IntrospectTokenResponse, error) {
-	dti.logger.Info("got IntrospectTokenRequest")
+	var userAgent string
 	var authMeta string
-	if mdVal := metadata.ValueFromIncomingContext(ctx, "authorization"); len(mdVal) != 0 {
-		authMeta = mdVal[0]
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if userAgentList := md.Get("user-agent"); len(userAgentList) > 0 {
+			userAgent = userAgentList[0]
+		}
+		if authList := md.Get("authorization"); len(authList) > 0 {
+			authMeta = authList[0]
+		}
 	}
+
+	dti.logger.Info("got IntrospectTokenRequest", log.String("user_agent", userAgent))
+
 	if authMeta != "Bearer "+accessTokenWithIntrospectionPermission {
 		return nil, idptest.ErrUnauthorized
 	}

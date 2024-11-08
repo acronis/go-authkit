@@ -2,8 +2,8 @@ code.cloudfoundry.org/bytefmt v0.0.0-20240808182453-a379845013d9 h1:8KlrGCtoaWaa
 code.cloudfoundry.org/bytefmt v0.0.0-20240808182453-a379845013d9/go.mod h1:eF2ZbltNI7Pv+8Cuyeksu9up5FN5konuH0trDJBuscw=
 github.com/RussellLuo/slidingwindow v0.0.0-20200528002341-535bb99d338b h1:5/++qT1/z812ZqBvqQt6ToRswSuPZ/B33m6xVHRzADU=
 github.com/RussellLuo/slidingwindow v0.0.0-20200528002341-535bb99d338b/go.mod h1:4+EPqMRApwwE/6yo6CxiHoSnBzjRr3jsqer7frxP8y4=
-github.com/acronis/go-appkit v1.3.0 h1:IaX0DbD7HWp8ykqnK9F+c8757AmP4uBHVBe8J0Wv2sw=
-github.com/acronis/go-appkit v1.3.0/go.mod h1:ouqWNe1/69fwjhx+2vV81Y6iqstfDzhmC6HpZ0E/gp4=
+github.com/acronis/go-appkit v1.5.0 h1:dhZZyZjKS3WD9zsomznRnDMxdzIW2pG+EI08/AqtH+E=
+github.com/acronis/go-appkit v1.5.0/go.mod h1:bDNkQ2ENdEz6vGHId22sE1NhZcScS61HY6GmVOkaS1s=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bsm/ginkgo/v2 v2.7.0/go.mod h1:AiKlXPm7ItEHNc/2+OkrNG4E0ITzojb9/xWzvQ9XZ9w=
@@ -14,6 +14,8 @@ github.com/cespare/xxhash/v2 v2.1.1/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XL
 github.com/cespare/xxhash/v2 v2.2.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/cloudflare/ahocorasick v0.0.0-20240916140611-054963ec9396 h1:W2HK1IdCnCGuLUeyizSCkwvBjdj0ZL7mxnJYQ3poyzI=
+github.com/cloudflare/ahocorasick v0.0.0-20240916140611-054963ec9396/go.mod h1:tGWUZLZp9ajsxUOnHmFFLnqnlKXsCn6GReG4jAD59H0=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=

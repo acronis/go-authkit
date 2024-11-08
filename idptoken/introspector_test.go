@@ -12,7 +12,6 @@ import (
 	gotesting "testing"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -48,7 +47,7 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, grpcClient.Close()) }()
 
-	jwtParser := jwt.NewParser(jwks.NewClient(), log.NewDisabledLogger())
+	jwtParser := jwt.NewParser(jwks.NewClient())
 	require.NoError(t, jwtParser.AddTrustedIssuerURL(httpIDPSrv.URL()))
 	httpServerIntrospector.JWTParser = jwtParser
 	grpcServerIntrospector.JWTParser = jwtParser
@@ -353,8 +352,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 	require.NoError(t, idpSrv.StartAndWaitForReady(time.Second))
 	defer func() { _ = idpSrv.Shutdown(context.Background()) }()
 
-	logger := log.NewDisabledLogger()
-	jwtParser := jwt.NewParser(jwks.NewClient(), logger)
+	jwtParser := jwt.NewParser(jwks.NewClient())
 	require.NoError(t, jwtParser.AddTrustedIssuerURL(idpSrv.URL()))
 	serverIntrospector.JWTParser = jwtParser
 

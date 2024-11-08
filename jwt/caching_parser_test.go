@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 
@@ -43,7 +42,6 @@ func TestGetTokenHash(t *testing.T) {
 }
 
 func TestCachingParser_Parse(t *testing.T) {
-	logger := log.NewDisabledLogger()
 	jwksServer := httptest.NewServer(&idptest.JWKSHandler{})
 	defer jwksServer.Close()
 
@@ -53,7 +51,7 @@ func TestCachingParser_Parse(t *testing.T) {
 	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(), logger)
+	parser, err := jwt.NewCachingParser(jwks.NewCachingClient())
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 
@@ -78,7 +76,6 @@ func TestCachingParser_Parse(t *testing.T) {
 func TestCachingParser_CheckExpiration(t *testing.T) {
 	const jwtTTL = 2 * time.Second
 
-	logger := log.NewDisabledLogger()
 	jwksServer := httptest.NewServer(&idptest.JWKSHandler{})
 	defer jwksServer.Close()
 
@@ -88,7 +85,7 @@ func TestCachingParser_CheckExpiration(t *testing.T) {
 	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(jwtTTL))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	parser, err := jwt.NewCachingParser(jwks.NewCachingClient(), logger)
+	parser, err := jwt.NewCachingParser(jwks.NewCachingClient())
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 

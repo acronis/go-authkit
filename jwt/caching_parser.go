@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/acronis/go-appkit/log"
 	"github.com/acronis/go-appkit/lrucache"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 
@@ -41,12 +40,12 @@ type CachingParser struct {
 	ClaimsCache ClaimsCache
 }
 
-func NewCachingParser(keysProvider KeysProvider, logger log.FieldLogger) (*CachingParser, error) {
-	return NewCachingParserWithOpts(keysProvider, logger, CachingParserOpts{})
+func NewCachingParser(keysProvider KeysProvider) (*CachingParser, error) {
+	return NewCachingParserWithOpts(keysProvider, CachingParserOpts{})
 }
 
 func NewCachingParserWithOpts(
-	keysProvider KeysProvider, logger log.FieldLogger, opts CachingParserOpts,
+	keysProvider KeysProvider, opts CachingParserOpts,
 ) (*CachingParser, error) {
 	promMetrics := metrics.GetPrometheusMetrics(opts.CachePrometheusInstanceLabel, "jwt_parser")
 	if opts.CacheMaxEntries == 0 {
@@ -57,7 +56,7 @@ func NewCachingParserWithOpts(
 		return nil, err
 	}
 	return &CachingParser{
-		Parser:      NewParserWithOpts(keysProvider, logger, opts.ParserOpts),
+		Parser:      NewParserWithOpts(keysProvider, opts.ParserOpts),
 		ClaimsCache: cache,
 	}, nil
 }

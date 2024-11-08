@@ -185,7 +185,8 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 		p.cache = NewInMemoryTokenCache()
 	}
 	if p.httpClient == nil {
-		p.httpClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, p.logger)
+		p.httpClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout,
+			func(_ context.Context) log.FieldLogger { return p.logger })
 	}
 
 	for _, source := range sources {

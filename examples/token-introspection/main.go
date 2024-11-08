@@ -43,16 +43,14 @@ func runApp() error {
 	defer loggerClose()
 
 	// Create JWT parser.
-	jwtParser, err := authkit.NewJWTParser(cfg.Auth, authkit.WithJWTParserLogger(logger))
+	jwtParser, err := authkit.NewJWTParser(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("create JWT parser: %w", err)
 	}
 
 	// Create token introspector.
-	introspectionScopeFilter := []idptoken.IntrospectionScopeFilterAccessPolicy{
-		{ResourceNamespace: serviceAccessPolicy}}
-	tokenIntrospector, err := authkit.NewTokenIntrospector(cfg.Auth, introspectionTokenProvider{},
-		introspectionScopeFilter, authkit.WithTokenIntrospectorLogger(logger))
+	introspectionScopeFilter := []idptoken.IntrospectionScopeFilterAccessPolicy{{ResourceNamespace: serviceAccessPolicy}}
+	tokenIntrospector, err := authkit.NewTokenIntrospector(cfg.Auth, introspectionTokenProvider{}, introspectionScopeFilter)
 	if err != nil {
 		return fmt.Errorf("create token introspector: %w", err)
 	}
@@ -64,8 +62,6 @@ func runApp() error {
 			}
 		}()
 	}
-
-	logMw := middleware.Logging(logger)
 
 	// Configure JWTAuthMiddleware that performs only authentication via OAuth2 token introspection endpoint.
 	authNMw := authkit.JWTAuthMiddleware(serviceErrorDomain, jwtParser,
@@ -81,16 +77,16 @@ func runApp() error {
 	// Create HTTP server and start it.
 	srvMux := http.NewServeMux()
 	// "/" endpoint will be available for all authenticated users.
-	srvMux.Handle("/", logMw(authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	srvMux.Handle("/", authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", jwtClaims.Subject)))
-	}))))
+	})))
 	// "/admin" endpoint will be available only for users with the "admin" role.
-	srvMux.Handle("/admin", logMw(authZMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	srvMux.Handle("/admin", authZMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // Get JWT claims from the request context.
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hi, %s", jwtClaims.Subject)))
-	}))))
-	if err = http.ListenAndServe(":8080", srvMux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	})))
+	if err = http.ListenAndServe(":8080", middleware.Logging(logger)(srvMux)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)
 	}
 

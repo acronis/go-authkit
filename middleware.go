@@ -17,6 +17,7 @@ import (
 	"github.com/acronis/go-appkit/restapi"
 
 	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -68,11 +69,13 @@ type jwtAuthHandler struct {
 	jwtParser         JWTParser
 	verifyAccess      func(r *http.Request, claims *jwt.Claims) bool
 	tokenIntrospector TokenIntrospector
+	loggerProvider    func(ctx context.Context) log.FieldLogger
 }
 
 type jwtAuthMiddlewareOpts struct {
 	verifyAccess      func(r *http.Request, claims *jwt.Claims) bool
 	tokenIntrospector TokenIntrospector
+	loggerProvider    func(ctx context.Context) log.FieldLogger
 }
 
 // JWTAuthMiddlewareOption is an option for JWTAuthMiddleware.
@@ -92,6 +95,13 @@ func WithJWTAuthMiddlewareTokenIntrospector(tokenIntrospector TokenIntrospector)
 	}
 }
 
+// WithJWTAuthMiddlewareLoggerProvider is an option to set a logger provider for JWTAuthMiddleware.
+func WithJWTAuthMiddlewareLoggerProvider(loggerProvider func(ctx context.Context) log.FieldLogger) JWTAuthMiddlewareOption {
+	return func(options *jwtAuthMiddlewareOpts) {
+		options.loggerProvider = loggerProvider
+	}
+}
+
 // JWTAuthMiddleware is a middleware that does authentication
 // by Access Token from the "Authorization" HTTP header of incoming request.
 // errorDomain is used for error responses. It is usually the name of the service that uses the middleware,
@@ -101,23 +111,29 @@ func WithJWTAuthMiddlewareTokenIntrospector(tokenIntrospector TokenIntrospector)
 //
 //	{"error": {"domain": "MyService", "code": "bearerTokenMissing", "message": "Authorization bearer token is missing."}}
 func JWTAuthMiddleware(errorDomain string, jwtParser JWTParser, opts ...JWTAuthMiddlewareOption) func(next http.Handler) http.Handler {
-	var options jwtAuthMiddlewareOpts
+	options := jwtAuthMiddlewareOpts{loggerProvider: middleware.GetLoggerFromContext}
 	for _, opt := range opts {
 		opt(&options)
 	}
 	return func(next http.Handler) http.Handler {
-		return &jwtAuthHandler{next, errorDomain, jwtParser, options.verifyAccess, options.tokenIntrospector}
+		return &jwtAuthHandler{
+			next:              next,
+			errorDomain:       errorDomain,
+			jwtParser:         jwtParser,
+			verifyAccess:      options.verifyAccess,
+			tokenIntrospector: options.tokenIntrospector,
+			loggerProvider:    options.loggerProvider,
+		}
 	}
 }
 
 func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	reqCtx := r.Context()
-	logger := middleware.GetLoggerFromContext(reqCtx)
 
 	bearerToken := GetBearerTokenFromRequest(r)
 	if bearerToken == "" {
 		apiErr := restapi.NewError(h.errorDomain, ErrCodeBearerTokenMissing, ErrMessageBearerTokenMissing)
-		restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
+		restapi.RespondError(rw, http.StatusUnauthorized, apiErr, h.logger(reqCtx))
 		return
 	}
 
@@ -127,37 +143,40 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			switch {
 			case errors.Is(err, idptoken.ErrTokenIntrospectionNotNeeded):
 				// Do nothing. Access Token already contains all necessary information for authN/authZ.
+				h.logger(reqCtx).AtLevel(log.LevelDebug, func(logFunc log.LogFunc) {
+					logFunc("token's introspection is not needed")
+				})
 			case errors.Is(err, idptoken.ErrTokenNotIntrospectable):
 				// Token is not introspectable by some reason.
 				// In this case, we will parse it as JWT and use it for authZ.
-				if logger != nil {
-					logger.Warn("token is not introspectable, it will be used for authentication and authorization as is",
-						log.Error(err))
-				}
+				h.logger(reqCtx).Warn("token is not introspectable, it will be used for authentication and authorization as is",
+					log.Error(err))
 			default:
-				if logger != nil {
-					logger.Error("token introspection failed", log.Error(err))
-				}
+				logger := h.logger(reqCtx)
+				logger.Error("token's introspection failed", log.Error(err))
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
 				return
 			}
 		} else {
 			if !introspectionResult.Active {
+				h.logger(reqCtx).Warn("token was successfully introspected, but it is not active")
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
-				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
+				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, h.logger(reqCtx))
 				return
 			}
 			jwtClaims = &introspectionResult.Claims
+			h.logger(reqCtx).AtLevel(log.LevelDebug, func(logFunc log.LogFunc) {
+				logFunc("token was successfully introspected")
+			})
 		}
 	}
 
 	if jwtClaims == nil {
 		var err error
 		if jwtClaims, err = h.jwtParser.Parse(reqCtx, bearerToken); err != nil {
-			if logger != nil {
-				logger.Error("authentication failed", log.Error(err))
-			}
+			logger := h.logger(reqCtx)
+			logger.Error("authentication failed", log.Error(err))
 			apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 			restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
 			return
@@ -167,7 +186,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if h.verifyAccess != nil {
 		if !h.verifyAccess(r, jwtClaims) {
 			apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthorizationFailed, ErrMessageAuthorizationFailed)
-			restapi.RespondError(rw, http.StatusForbidden, apiErr, logger)
+			restapi.RespondError(rw, http.StatusForbidden, apiErr, h.logger(reqCtx))
 			return
 		}
 	}
@@ -175,6 +194,10 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	reqCtx = NewContextWithBearerToken(reqCtx, bearerToken)
 	reqCtx = NewContextWithJWTClaims(reqCtx, jwtClaims)
 	h.next.ServeHTTP(rw, r.WithContext(reqCtx))
+}
+
+func (h *jwtAuthHandler) logger(ctx context.Context) log.FieldLogger {
+	return idputil.GetLoggerFromProvider(ctx, h.loggerProvider)
 }
 
 // GetBearerTokenFromRequest extracts jwt token from request headers.
