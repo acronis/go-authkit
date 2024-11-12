@@ -47,7 +47,13 @@ const (
 	DefaultIntrospectionNegativeCacheMaxEntries = 1000
 
 	// DefaultIntrospectionNegativeCacheTTL is a default time-to-live for the negative cache.
-	DefaultIntrospectionNegativeCacheTTL = 10 * time.Minute
+	DefaultIntrospectionNegativeCacheTTL = 1 * time.Hour
+
+	// DefaultIntrospectionEndpointDiscoveryCacheMaxEntries is a default maximum number of entries in the endpoint discovery cache.
+	DefaultIntrospectionEndpointDiscoveryCacheMaxEntries = 1000
+
+	// DefaultIntrospectionEndpointDiscoveryCacheTTL is a default time-to-live for the endpoint discovery cache.
+	DefaultIntrospectionEndpointDiscoveryCacheTTL = 1 * time.Hour
 )
 
 // ErrTokenNotIntrospectable is returned when token is not introspectable.
@@ -119,6 +125,9 @@ type IntrospectorOpts struct {
 
 	// NegativeCache is a configuration of how negative cache will be used.
 	NegativeCache IntrospectorCacheOpts
+
+	// EndpointDiscoveryCache is a configuration of how endpoint discovery cache will be used.
+	EndpointDiscoveryCache IntrospectorCacheOpts
 }
 
 // IntrospectorCacheOpts is a configuration of how cache will be used.
@@ -144,6 +153,9 @@ type Introspector struct {
 	// NegativeCache is a cache for storing info about tokens that are not active.
 	NegativeCache IntrospectionNegativeCache
 
+	// EndpointDiscoveryCache is a cache for storing OpenID configuration.
+	EndpointDiscoveryCache IntrospectionEndpointDiscoveryCache
+
 	accessTokenProvider              IntrospectionTokenProvider
 	accessTokenProviderInvalidatedAt atomic.Value
 	accessTokenScope                 []string
@@ -162,8 +174,9 @@ type Introspector struct {
 
 	promMetrics *metrics.PrometheusMetrics
 
-	claimsCacheTTL   time.Duration
-	negativeCacheTTL time.Duration
+	claimsCacheTTL            time.Duration
+	negativeCacheTTL          time.Duration
+	endpointDiscoveryCacheTTL time.Duration
 }
 
 // IntrospectionResult is a struct for introspection result.
@@ -205,6 +218,10 @@ func NewIntrospector(tokenProvider IntrospectionTokenProvider) (*Introspector, e
 // NewIntrospectorWithOpts creates a new Introspector with the given token provider and options.
 // See IntrospectorOpts for more details.
 func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opts IntrospectorOpts) (*Introspector, error) {
+	if accessTokenProvider == nil {
+		return nil, errors.New("access token provider is required")
+	}
+
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider)
 	}
@@ -217,38 +234,17 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, tokenIntrospectorPromSource)
 
-	// Building claims cache if needed.
-	var claimsCache IntrospectionClaimsCache = &disabledIntrospectionClaimsCache{}
-	if opts.ClaimsCache.Enabled {
-		if opts.ClaimsCache.TTL == 0 {
-			opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
-		}
-		if opts.ClaimsCache.MaxEntries == 0 {
-			opts.ClaimsCache.MaxEntries = DefaultIntrospectionClaimsCacheMaxEntries
-		}
-		cache, err := lrucache.New[[sha256.Size]byte, IntrospectionClaimsCacheItem](
-			opts.ClaimsCache.MaxEntries, promMetrics.TokenClaimsCache)
-		if err != nil {
-			return nil, err
-		}
-		claimsCache = &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionClaimsCacheItem]{cache}
+	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache, promMetrics)
+	if opts.ClaimsCache.TTL == 0 {
+		opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
 	}
-
-	// Building negative cache if needed.
-	var negativeCache IntrospectionNegativeCache = &disabledIntrospectionNegativeCache{}
-	if opts.NegativeCache.Enabled {
-		if opts.NegativeCache.TTL == 0 {
-			opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
-		}
-		if opts.NegativeCache.MaxEntries == 0 {
-			opts.NegativeCache.MaxEntries = DefaultIntrospectionNegativeCacheMaxEntries
-		}
-		cache, err := lrucache.New[[sha256.Size]byte, IntrospectionNegativeCacheItem](
-			opts.NegativeCache.MaxEntries, promMetrics.TokenNegativeCache)
-		if err != nil {
-			return nil, err
-		}
-		negativeCache = &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionNegativeCacheItem]{cache}
+	negativeCache := makeIntrospectionNegativeCache(opts.NegativeCache, promMetrics)
+	if opts.NegativeCache.TTL == 0 {
+		opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
+	}
+	endpointDiscoveryCache := makeIntrospectionEndpointDiscoveryCache(opts.EndpointDiscoveryCache, promMetrics)
+	if opts.EndpointDiscoveryCache.TTL == 0 {
+		opts.EndpointDiscoveryCache.TTL = DefaultIntrospectionEndpointDiscoveryCacheTTL
 	}
 
 	return &Introspector{
@@ -268,6 +264,8 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		claimsCacheTTL:                opts.ClaimsCache.TTL,
 		NegativeCache:                 negativeCache,
 		negativeCacheTTL:              opts.NegativeCache.TTL,
+		EndpointDiscoveryCache:        endpointDiscoveryCache,
+		endpointDiscoveryCacheTTL:     opts.EndpointDiscoveryCache.TTL,
 	}, nil
 }
 
@@ -502,8 +500,17 @@ func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 }
 
 func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context, issuerURL string) (string, error) {
+	cacheKey := sha256.Sum256(
+		unsafe.Slice(unsafe.StringData(issuerURL), len(issuerURL))) // nolint:gosec // prevent redundant slice copying
+
+	if c, ok := i.EndpointDiscoveryCache.Get(ctx, cacheKey); ok {
+		if c.CreatedAt.Add(i.endpointDiscoveryCacheTTL).After(time.Now()) {
+			return c.IntrospectionEndpoint, nil
+		}
+	}
+
 	logger := idputil.GetLoggerFromProvider(ctx, i.loggerProvider)
-	openIDCfgURL := strings.TrimSuffix(issuerURL, "/") + wellKnownPath
+	openIDCfgURL := strings.TrimSuffix(issuerURL, "/") + idputil.OpenIDConfigurationPath
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
 		ctx, i.HTTPClient, openIDCfgURL, nil, logger, i.promMetrics)
 	if err != nil {
@@ -512,6 +519,12 @@ func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context,
 	if openIDCfg.IntrospectionEndpoint == "" {
 		return "", fmt.Errorf("no introspection endpoint URL found on %s", openIDCfgURL)
 	}
+
+	i.EndpointDiscoveryCache.Add(ctx, cacheKey, IntrospectionEndpointDiscoveryCacheItem{
+		IntrospectionEndpoint: openIDCfg.IntrospectionEndpoint,
+		CreatedAt:             time.Now(),
+	})
+
 	return openIDCfg.IntrospectionEndpoint, nil
 }
 
@@ -611,6 +624,18 @@ type IntrospectionClaimsCache interface {
 	Len(ctx context.Context) int
 }
 
+func makeIntrospectionClaimsCache(opts IntrospectorCacheOpts, promMetrics *metrics.PrometheusMetrics) IntrospectionClaimsCache {
+	if !opts.Enabled {
+		return &disabledIntrospectionClaimsCache{}
+	}
+	if opts.MaxEntries <= 0 {
+		opts.MaxEntries = DefaultIntrospectionClaimsCacheMaxEntries
+	}
+	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionClaimsCacheItem](
+		opts.MaxEntries, promMetrics.TokenClaimsCache) // error is always nil here
+	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionClaimsCacheItem]{cache}
+}
+
 type IntrospectionNegativeCacheItem struct {
 	CreatedAt time.Time
 }
@@ -620,6 +645,50 @@ type IntrospectionNegativeCache interface {
 	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionNegativeCacheItem)
 	Purge(ctx context.Context)
 	Len(ctx context.Context) int
+}
+
+func makeIntrospectionNegativeCache(opts IntrospectorCacheOpts, promMetrics *metrics.PrometheusMetrics) IntrospectionNegativeCache {
+	if !opts.Enabled {
+		return &disabledIntrospectionNegativeCache{}
+	}
+	if opts.TTL == 0 {
+		opts.TTL = DefaultIntrospectionNegativeCacheTTL
+	}
+	if opts.MaxEntries <= 0 {
+		opts.MaxEntries = DefaultIntrospectionNegativeCacheMaxEntries
+	}
+	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionNegativeCacheItem](
+		opts.MaxEntries, promMetrics.TokenNegativeCache) // error is always nil here
+	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionNegativeCacheItem]{cache}
+}
+
+type IntrospectionEndpointDiscoveryCacheItem struct {
+	IntrospectionEndpoint string
+	CreatedAt             time.Time
+}
+
+type IntrospectionEndpointDiscoveryCache interface {
+	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionEndpointDiscoveryCacheItem, bool)
+	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionEndpointDiscoveryCacheItem)
+	Purge(ctx context.Context)
+	Len(ctx context.Context) int
+}
+
+func makeIntrospectionEndpointDiscoveryCache(
+	opts IntrospectorCacheOpts, promMetrics *metrics.PrometheusMetrics,
+) IntrospectionEndpointDiscoveryCache {
+	if !opts.Enabled {
+		return &disabledIntrospectionEndpointDiscoveryCache{}
+	}
+	if opts.TTL == 0 {
+		opts.TTL = DefaultIntrospectionEndpointDiscoveryCacheTTL
+	}
+	if opts.MaxEntries <= 0 {
+		opts.MaxEntries = DefaultIntrospectionEndpointDiscoveryCacheMaxEntries
+	}
+	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem](
+		opts.MaxEntries, promMetrics.EndpointDiscoveryCache) // error is always nil here
+	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem]{cache}
 }
 
 type IntrospectionLRUCache[K comparable, V any] struct {
@@ -661,3 +730,17 @@ func (c *disabledIntrospectionNegativeCache) Add(ctx context.Context, key [sha25
 }
 func (c *disabledIntrospectionNegativeCache) Purge(ctx context.Context)   {}
 func (c *disabledIntrospectionNegativeCache) Len(ctx context.Context) int { return 0 }
+
+type disabledIntrospectionEndpointDiscoveryCache struct{}
+
+func (c *disabledIntrospectionEndpointDiscoveryCache) Get(
+	ctx context.Context, key [sha256.Size]byte,
+) (IntrospectionEndpointDiscoveryCacheItem, bool) {
+	return IntrospectionEndpointDiscoveryCacheItem{}, false
+}
+func (c *disabledIntrospectionEndpointDiscoveryCache) Add(
+	ctx context.Context, key [sha256.Size]byte, value IntrospectionEndpointDiscoveryCacheItem,
+) {
+}
+func (c *disabledIntrospectionEndpointDiscoveryCache) Purge(ctx context.Context)   {}
+func (c *disabledIntrospectionEndpointDiscoveryCache) Len(ctx context.Context) int { return 0 }

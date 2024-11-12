@@ -95,6 +95,11 @@ func (h *JWKSHandler) ServedCount() uint64 {
 	return h.servedCount.Load()
 }
 
+// ResetServedCount resets the number of times JWKS handler has been served.
+func (h *JWKSHandler) ResetServedCount() {
+	h.servedCount.Store(0)
+}
+
 type PublicJWKSResponse struct {
 	Keys []PublicJWK `json:"keys"`
 }

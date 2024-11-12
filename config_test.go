@@ -46,13 +46,17 @@ auth:
     enabled: true
     endpoint: https://my-idp.com/introspect
     claimsCache:
-        enabled: true
-        maxEntries: 42000
-        ttl: 42s
+      enabled: true
+      maxEntries: 42000
+      ttl: 42s
     negativeCache:
-        enabled: true
-        maxEntries: 777
-        ttl: 77s
+      enabled: true
+      maxEntries: 777
+      ttl: 77m
+    endpointDiscoveryCache:
+      enabled: true
+      maxEntries: 73
+      ttl: 7h
     accessTokenScope:
       - token_introspector
     grpc:
@@ -98,7 +102,12 @@ auth:
 			NegativeCache: IntrospectionCacheConfig{
 				Enabled:    true,
 				MaxEntries: 777,
-				TTL:        time.Second * 77,
+				TTL:        time.Minute * 77,
+			},
+			EndpointDiscoveryCache: IntrospectionCacheConfig{
+				Enabled:    true,
+				MaxEntries: 73,
+				TTL:        time.Hour * 7,
 			},
 			AccessTokenScope: []string{"token_introspector"},
 			GRPC: IntrospectionGRPCConfig{

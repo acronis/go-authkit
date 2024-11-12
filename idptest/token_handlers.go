@@ -87,6 +87,11 @@ func (h *TokenHandler) ServedCount() uint64 {
 	return h.servedCount.Load()
 }
 
+// ResetServedCount resets the number of times the handler has been served.
+func (h *TokenHandler) ResetServedCount() {
+	h.servedCount.Store(0)
+}
+
 // TokenResponse is a response for POST /idp/token endpoint.
 type TokenResponse struct {
 	AccessToken string `json:"access_token"`
@@ -148,4 +153,9 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 // ServedCount returns the number of times the handler has been served.
 func (h *TokenIntrospectionHandler) ServedCount() uint64 {
 	return h.servedCount.Load()
+}
+
+// ResetServedCount resets the number of times the handler has been served.
+func (h *TokenIntrospectionHandler) ResetServedCount() {
+	h.servedCount.Store(0)
 }

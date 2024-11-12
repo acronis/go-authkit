@@ -23,8 +23,6 @@ import (
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
-const OpenIDConfigurationPath = "/.well-known/openid-configuration"
-
 type jwksData struct {
 	Keys []*gojwk.Key `json:"keys"`
 }
@@ -69,7 +67,7 @@ func NewClientWithOpts(opts ClientOpts) *Client {
 func (c *Client) getRSAPubKeysForIssuer(ctx context.Context, issuerURL string) (map[string]interface{}, error) {
 	logger := idputil.GetLoggerFromProvider(ctx, c.loggerProvider)
 
-	openIDConfigURL := strings.TrimPrefix(issuerURL, "/") + OpenIDConfigurationPath
+	openIDConfigURL := strings.TrimPrefix(issuerURL, "/") + idputil.OpenIDConfigurationPath
 	openIDConfig, err := idputil.GetOpenIDConfiguration(
 		ctx, c.httpClient, openIDConfigURL, nil, logger, c.promMetrics)
 	if err != nil {

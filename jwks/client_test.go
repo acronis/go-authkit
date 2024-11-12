@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/idptest"
+	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/jwks"
 )
 
@@ -47,7 +48,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, openIDCfgErr.URL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, openIDCfgErr.URL)
 		requireLocalhostConnRefusedError(t, openIDCfgErr.Inner)
 		require.Nil(t, pubKey)
 	})
@@ -63,7 +64,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, openIDCfgErr.URL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, openIDCfgErr.URL)
 		require.EqualError(t, openIDCfgErr.Inner, "unexpected HTTP code 500")
 		require.Nil(t, pubKey)
 	})
@@ -80,7 +81,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, openIDCfgErr.URL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, openIDCfgErr.URL)
 		var jsonSyntaxErr *json.SyntaxError
 		require.True(t, errors.As(openIDCfgErr, &jsonSyntaxErr))
 		require.Nil(t, pubKey)
@@ -98,7 +99,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		var jwksErr *jwks.GetJWKSError
 		require.True(t, errors.As(err, &jwksErr))
 		require.Equal(t, jwksServer.URL, jwksErr.URL)
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, jwksErr.OpenIDConfigurationURL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, jwksErr.OpenIDConfigurationURL)
 		requireLocalhostConnRefusedError(t, jwksErr.Inner)
 		require.Nil(t, pubKey)
 	})
@@ -117,7 +118,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		var jwksErr *jwks.GetJWKSError
 		require.True(t, errors.As(err, &jwksErr))
 		require.Equal(t, jwksServer.URL, jwksErr.URL)
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, jwksErr.OpenIDConfigurationURL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, jwksErr.OpenIDConfigurationURL)
 		require.EqualError(t, jwksErr.Inner, "unexpected HTTP code 500")
 		require.Nil(t, pubKey)
 	})
@@ -153,7 +154,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		require.Error(t, err)
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
-		require.Equal(t, issuerConfigServer.URL+jwks.OpenIDConfigurationPath, openIDCfgErr.URL)
+		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, openIDCfgErr.URL)
 		require.ErrorIs(t, openIDCfgErr, context.Canceled)
 		require.Nil(t, pubKey)
 	})

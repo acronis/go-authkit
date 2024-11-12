@@ -205,10 +205,9 @@ func NewHTTPServer(options ...HTTPServerOption) *HTTPServer {
 	})
 
 	s.Router = http.NewServeMux()
-	s.Router.Handle(s.paths.OpenIDConfiguration, s.OpenIDConfigurationHandler)
-	s.Router.Handle(s.paths.JWKS, s.KeysHandler)
-	s.Router.Handle(s.paths.Token, s.TokenHandler)
-	s.Router.Handle(s.paths.TokenIntrospection, s.TokenIntrospectionHandler)
+	for path, handler := range s.allHandlers() {
+		s.Router.Handle(path, handler)
+	}
 
 	// nolint:gosec // This server is used for testing purposes only.
 	s.Server = &http.Server{Handler: s.Router}
@@ -256,8 +255,37 @@ func (s *HTTPServer) StartAndWaitForReady(timeout time.Duration) error {
 	return testutil.WaitListeningServer(s.addr.Load().(string), timeout)
 }
 
+// ServedCounts returns the number of requests served by each handler.
+func (s *HTTPServer) ServedCounts() map[string]uint64 {
+	counts := make(map[string]uint64)
+	for path, handler := range s.allHandlers() {
+		if counter, ok := handler.(interface{ ServedCount() uint64 }); ok {
+			counts[path] = counter.ServedCount()
+		}
+	}
+	return counts
+}
+
+// ResetServedCounts resets the number of requests served by each handler.
+func (s *HTTPServer) ResetServedCounts() {
+	for _, h := range s.allHandlers() {
+		if r, ok := h.(interface{ ResetServedCount() }); ok {
+			r.ResetServedCount()
+		}
+	}
+}
+
 func (s *HTTPServer) makeJWTParser() *jwt.Parser {
 	p := jwt.NewParser(jwks.NewClient())
 	_ = p.AddTrustedIssuerURL(s.URL())
 	return p
+}
+
+func (s *HTTPServer) allHandlers() map[string]http.Handler {
+	return map[string]http.Handler{
+		s.paths.JWKS:                s.KeysHandler,
+		s.paths.OpenIDConfiguration: s.OpenIDConfigurationHandler,
+		s.paths.Token:               s.TokenHandler,
+		s.paths.TokenIntrospection:  s.TokenIntrospectionHandler,
+	}
 }

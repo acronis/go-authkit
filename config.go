@@ -20,29 +20,32 @@ import (
 )
 
 const (
-	cfgKeyHTTPClientRequestTimeout             = "auth.httpClient.requestTimeout"
-	cfgKeyGRPCClientRequestTimeout             = "auth.grpcClient.requestTimeout"
-	cfgKeyJWTTrustedIssuers                    = "auth.jwt.trustedIssuers"
-	cfgKeyJWTTrustedIssuerURLs                 = "auth.jwt.trustedIssuerUrls"
-	cfgKeyJWTRequireAudience                   = "auth.jwt.requireAudience"
-	cfgKeyJWTExceptedAudience                  = "auth.jwt.expectedAudience"
-	cfgKeyJWTClaimsCacheEnabled                = "auth.jwt.claimsCache.enabled"
-	cfgKeyJWTClaimsCacheMaxEntries             = "auth.jwt.claimsCache.maxEntries"
-	cfgKeyJWKSCacheUpdateMinInterval           = "auth.jwks.cache.updateMinInterval"
-	cfgKeyIntrospectionEnabled                 = "auth.introspection.enabled"
-	cfgKeyIntrospectionEndpoint                = "auth.introspection.endpoint"
-	cfgKeyIntrospectionGRPCEndpoint            = "auth.introspection.grpc.endpoint"
-	cfgKeyIntrospectionGRPCTLSEnabled          = "auth.introspection.grpc.tls.enabled"
-	cfgKeyIntrospectionGRPCTLSCACert           = "auth.introspection.grpc.tls.caCert"
-	cfgKeyIntrospectionGRPCTLSClientCert       = "auth.introspection.grpc.tls.clientCert"
-	cfgKeyIntrospectionGRPCTLSClientKey        = "auth.introspection.grpc.tls.clientKey"
-	cfgKeyIntrospectionAccessTokenScope        = "auth.introspection.accessTokenScope" // nolint:gosec // false positive
-	cfgKeyIntrospectionClaimsCacheEnabled      = "auth.introspection.claimsCache.enabled"
-	cfgKeyIntrospectionClaimsCacheMaxEntries   = "auth.introspection.claimsCache.maxEntries"
-	cfgKeyIntrospectionClaimsCacheTTL          = "auth.introspection.claimsCache.ttl"
-	cfgKeyIntrospectionNegativeCacheEnabled    = "auth.introspection.negativeCache.enabled"
-	cfgKeyIntrospectionNegativeCacheMaxEntries = "auth.introspection.negativeCache.maxEntries"
-	cfgKeyIntrospectionNegativeCacheTTL        = "auth.introspection.negativeCache.ttl"
+	cfgKeyHTTPClientRequestTimeout                      = "auth.httpClient.requestTimeout"
+	cfgKeyGRPCClientRequestTimeout                      = "auth.grpcClient.requestTimeout"
+	cfgKeyJWTTrustedIssuers                             = "auth.jwt.trustedIssuers"
+	cfgKeyJWTTrustedIssuerURLs                          = "auth.jwt.trustedIssuerUrls"
+	cfgKeyJWTRequireAudience                            = "auth.jwt.requireAudience"
+	cfgKeyJWTExceptedAudience                           = "auth.jwt.expectedAudience"
+	cfgKeyJWTClaimsCacheEnabled                         = "auth.jwt.claimsCache.enabled"
+	cfgKeyJWTClaimsCacheMaxEntries                      = "auth.jwt.claimsCache.maxEntries"
+	cfgKeyJWKSCacheUpdateMinInterval                    = "auth.jwks.cache.updateMinInterval"
+	cfgKeyIntrospectionEnabled                          = "auth.introspection.enabled"
+	cfgKeyIntrospectionEndpoint                         = "auth.introspection.endpoint"
+	cfgKeyIntrospectionGRPCEndpoint                     = "auth.introspection.grpc.endpoint"
+	cfgKeyIntrospectionGRPCTLSEnabled                   = "auth.introspection.grpc.tls.enabled"
+	cfgKeyIntrospectionGRPCTLSCACert                    = "auth.introspection.grpc.tls.caCert"
+	cfgKeyIntrospectionGRPCTLSClientCert                = "auth.introspection.grpc.tls.clientCert"
+	cfgKeyIntrospectionGRPCTLSClientKey                 = "auth.introspection.grpc.tls.clientKey"
+	cfgKeyIntrospectionAccessTokenScope                 = "auth.introspection.accessTokenScope" // nolint:gosec // false positive
+	cfgKeyIntrospectionClaimsCacheEnabled               = "auth.introspection.claimsCache.enabled"
+	cfgKeyIntrospectionClaimsCacheMaxEntries            = "auth.introspection.claimsCache.maxEntries"
+	cfgKeyIntrospectionClaimsCacheTTL                   = "auth.introspection.claimsCache.ttl"
+	cfgKeyIntrospectionNegativeCacheEnabled             = "auth.introspection.negativeCache.enabled"
+	cfgKeyIntrospectionNegativeCacheMaxEntries          = "auth.introspection.negativeCache.maxEntries"
+	cfgKeyIntrospectionNegativeCacheTTL                 = "auth.introspection.negativeCache.ttl"
+	cfgKeyIntrospectionEndpointDiscoveryCacheEnabled    = "auth.introspection.endpointDiscoveryCache.enabled"
+	cfgKeyIntrospectionEndpointDiscoveryCacheMaxEntries = "auth.introspection.endpointDiscoveryCache.maxEntries"
+	cfgKeyIntrospectionEndpointDiscoveryCacheTTL        = "auth.introspection.endpointDiscoveryCache.ttl"
 )
 
 // JWTConfig is configuration of how JWT will be verified.
@@ -68,8 +71,9 @@ type IntrospectionConfig struct {
 	Endpoint         string
 	AccessTokenScope []string
 
-	ClaimsCache   IntrospectionCacheConfig
-	NegativeCache IntrospectionCacheConfig
+	ClaimsCache            IntrospectionCacheConfig
+	NegativeCache          IntrospectionCacheConfig
+	EndpointDiscoveryCache IntrospectionCacheConfig
 
 	GRPC IntrospectionGRPCConfig
 }
@@ -145,12 +149,19 @@ func (c *Config) KeyPrefix() string {
 func (c *Config) SetProviderDefaults(dp config.DataProvider) {
 	dp.SetDefault(cfgKeyHTTPClientRequestTimeout, idputil.DefaultHTTPRequestTimeout.String())
 	dp.SetDefault(cfgKeyGRPCClientRequestTimeout, idptoken.DefaultGRPCClientRequestTimeout.String())
+
 	dp.SetDefault(cfgKeyJWTClaimsCacheMaxEntries, jwt.DefaultClaimsCacheMaxEntries)
 	dp.SetDefault(cfgKeyJWKSCacheUpdateMinInterval, jwks.DefaultCacheUpdateMinInterval.String())
+
 	dp.SetDefault(cfgKeyIntrospectionClaimsCacheMaxEntries, idptoken.DefaultIntrospectionClaimsCacheMaxEntries)
 	dp.SetDefault(cfgKeyIntrospectionClaimsCacheTTL, idptoken.DefaultIntrospectionClaimsCacheTTL.String())
+
 	dp.SetDefault(cfgKeyIntrospectionNegativeCacheMaxEntries, idptoken.DefaultIntrospectionNegativeCacheMaxEntries)
 	dp.SetDefault(cfgKeyIntrospectionNegativeCacheTTL, idptoken.DefaultIntrospectionNegativeCacheTTL.String())
+
+	dp.SetDefault(cfgKeyIntrospectionEndpointDiscoveryCacheEnabled, true)
+	dp.SetDefault(cfgKeyIntrospectionEndpointDiscoveryCacheMaxEntries, idptoken.DefaultIntrospectionEndpointDiscoveryCacheMaxEntries)
+	dp.SetDefault(cfgKeyIntrospectionEndpointDiscoveryCacheTTL, idptoken.DefaultIntrospectionEndpointDiscoveryCacheTTL.String())
 }
 
 // Set sets auth configuration values from config.DataProvider.
@@ -276,6 +287,26 @@ func (c *Config) setIntrospectionConfig(dp config.DataProvider) error {
 		return dp.WrapKeyErr(cfgKeyIntrospectionNegativeCacheMaxEntries, fmt.Errorf("max entries should be non-negative"))
 	}
 	if c.Introspection.NegativeCache.TTL, err = dp.GetDuration(cfgKeyIntrospectionNegativeCacheTTL); err != nil {
+		return err
+	}
+
+	// OpenID configuration cache
+	if c.Introspection.EndpointDiscoveryCache.Enabled, err = dp.GetBool(
+		cfgKeyIntrospectionEndpointDiscoveryCacheEnabled,
+	); err != nil {
+		return err
+	}
+	if c.Introspection.EndpointDiscoveryCache.MaxEntries, err = dp.GetInt(
+		cfgKeyIntrospectionEndpointDiscoveryCacheMaxEntries,
+	); err != nil {
+		return err
+	}
+	if c.Introspection.EndpointDiscoveryCache.MaxEntries < 0 {
+		return dp.WrapKeyErr(cfgKeyIntrospectionEndpointDiscoveryCacheMaxEntries, fmt.Errorf("max entries should be non-negative"))
+	}
+	if c.Introspection.EndpointDiscoveryCache.TTL, err = dp.GetDuration(
+		cfgKeyIntrospectionEndpointDiscoveryCacheTTL,
+	); err != nil {
 		return err
 	}
 
