@@ -32,7 +32,6 @@ const (
 	defaultMinRefreshPeriod = time.Second * 10
 	defaultExpirationOffset = time.Minute * 30
 	expiryDeltaMaxOffset    = 5
-	wellKnownPath           = "/.well-known/openid-configuration"
 )
 
 // ErrSourceNotRegistered is returned if GetToken is requested for the unknown Source
@@ -541,7 +540,7 @@ func (ti *oauth2Issuer) ensureTokenURL(ctx context.Context, customHeaders map[st
 		return nil
 	}
 
-	openIDCfgURL := strings.TrimSuffix(ti.baseURL, "/") + wellKnownPath
+	openIDCfgURL := strings.TrimSuffix(ti.baseURL, "/") + idputil.OpenIDConfigurationPath
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
 		ctx, ti.httpClient, openIDCfgURL, customHeaders, ti.logger, ti.promMetrics)
 	if err != nil {

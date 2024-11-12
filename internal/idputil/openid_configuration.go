@@ -18,6 +18,8 @@ import (
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
+const OpenIDConfigurationPath = "/.well-known/openid-configuration"
+
 type OpenIDConfiguration struct {
 	TokenURL              string `json:"token_endpoint"`
 	IntrospectionEndpoint string `json:"introspection_endpoint"`

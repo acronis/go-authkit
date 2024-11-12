@@ -60,6 +60,7 @@ type PrometheusMetrics struct {
 	GRPCClientRequestDuration *prometheus.HistogramVec
 	TokenClaimsCache          *lrucache.PrometheusMetrics
 	TokenNegativeCache        *lrucache.PrometheusMetrics
+	EndpointDiscoveryCache    *lrucache.PrometheusMetrics
 }
 
 func GetPrometheusMetrics(instance string, source string) *PrometheusMetrics {
@@ -117,11 +118,18 @@ func newPrometheusMetrics() *PrometheusMetrics {
 		CurriedLabelNames: curriedLabelNames,
 	})
 
+	endpointDiscoveryCache := lrucache.NewPrometheusMetricsWithOpts(lrucache.PrometheusMetricsOpts{
+		Namespace:         PrometheusNamespace + "_openid_configuration",
+		ConstLabels:       PrometheusLabels(),
+		CurriedLabelNames: curriedLabelNames,
+	})
+
 	return &PrometheusMetrics{
 		HTTPClientRequestDuration: httpClientReqDuration,
 		GRPCClientRequestDuration: grpcClientReqDuration,
 		TokenClaimsCache:          tokenClaimsCache,
 		TokenNegativeCache:        tokenNegativeCache,
+		EndpointDiscoveryCache:    endpointDiscoveryCache,
 	}
 }
 
@@ -132,6 +140,7 @@ func (pm *PrometheusMetrics) MustCurryWith(labels prometheus.Labels) *Prometheus
 		GRPCClientRequestDuration: pm.GRPCClientRequestDuration.MustCurryWith(labels).(*prometheus.HistogramVec),
 		TokenClaimsCache:          pm.TokenClaimsCache.MustCurryWith(labels),
 		TokenNegativeCache:        pm.TokenNegativeCache.MustCurryWith(labels),
+		EndpointDiscoveryCache:    pm.EndpointDiscoveryCache.MustCurryWith(labels),
 	}
 }
 
@@ -143,6 +152,7 @@ func (pm *PrometheusMetrics) MustRegister() {
 	)
 	pm.TokenClaimsCache.MustRegister()
 	pm.TokenNegativeCache.MustRegister()
+	pm.EndpointDiscoveryCache.MustRegister()
 }
 
 // Unregister cancels registration of metrics collector in Prometheus.
@@ -151,6 +161,7 @@ func (pm *PrometheusMetrics) Unregister() {
 	prometheus.Unregister(pm.GRPCClientRequestDuration)
 	pm.TokenClaimsCache.Unregister()
 	pm.TokenNegativeCache.Unregister()
+	pm.EndpointDiscoveryCache.Unregister()
 }
 
 func (pm *PrometheusMetrics) ObserveHTTPClientRequest(

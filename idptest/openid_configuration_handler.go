@@ -46,6 +46,11 @@ func (h *OpenIDConfigurationHandler) ServedCount() uint64 {
 	return h.servedCount.Load()
 }
 
+// ResetServedCount resets the number of times the handler has been served.
+func (h *OpenIDConfigurationHandler) ResetServedCount() {
+	h.servedCount.Store(0)
+}
+
 // OpenIDConfigurationResponse is a response for .well-known/openid-configuration endpoint.
 type OpenIDConfigurationResponse struct {
 	TokenEndpoint         string `json:"token_endpoint"`

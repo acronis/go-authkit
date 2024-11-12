@@ -22,7 +22,6 @@ import (
 	"github.com/acronis/go-authkit/idptoken/pb"
 	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/testing"
-	"github.com/acronis/go-authkit/jwks"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -47,11 +46,6 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, grpcClient.Close()) }()
 
-	jwtParser := jwt.NewParser(jwks.NewClient())
-	require.NoError(t, jwtParser.AddTrustedIssuerURL(httpIDPSrv.URL()))
-	httpServerIntrospector.JWTParser = jwtParser
-	grpcServerIntrospector.JWTParser = jwtParser
-
 	jwtScopeToGRPC := func(jwtScope []jwt.AccessPolicy) []*pb.AccessTokenScope {
 		grpcScope := make([]*pb.AccessTokenScope, len(jwtScope))
 		for i, scope := range jwtScope {
@@ -65,17 +59,35 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		return grpcScope
 	}
 
-	jwtExpiresAtInFuture := jwtgo.NewNumericDate(time.Now().Add(time.Hour))
-	jwtIssuer := httpIDPSrv.URL()
-	jwtSubject := uuid.NewString()
-	jwtID := uuid.NewString()
-	jwtScope := []jwt.AccessPolicy{{
+	// Expired JWT
+	expiredJWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
+		RegisteredClaims: jwtgo.RegisteredClaims{
+			Issuer:    httpIDPSrv.URL(),
+			Subject:   uuid.NewString(),
+			ID:        uuid.NewString(),
+			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(-time.Hour)),
+		},
+	})
+	httpServerIntrospector.SetResultForToken(expiredJWT, idptoken.IntrospectionResult{Active: false})
+
+	// Valid JWT with scope
+	validJWTScope := []jwt.AccessPolicy{{
 		TenantUUID:        uuid.NewString(),
 		ResourceNamespace: "account-server",
 		Role:              "account_viewer",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
+	validJWTClaims := jwtgo.RegisteredClaims{
+		Issuer:    httpIDPSrv.URL(),
+		Subject:   uuid.NewString(),
+		ID:        uuid.NewString(),
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	validJWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{RegisteredClaims: validJWTClaims})
+	httpServerIntrospector.SetResultForToken(validJWT, idptoken.IntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{RegisteredClaims: validJWTClaims, Scope: validJWTScope}})
 
+	// Opaque token
 	opaqueToken := "opaque-token-" + uuid.NewString()
 	opaqueTokenScope := []jwt.AccessPolicy{{
 		TenantUUID:        uuid.NewString(),
@@ -83,13 +95,10 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		Role:              "admin",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
-
-	httpServerIntrospector.SetScopeForJWTID(jwtID, jwtScope)
 	httpServerIntrospector.SetResultForToken(opaqueToken, idptoken.IntrospectionResult{
 		Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueTokenScope}})
-	grpcServerIntrospector.SetScopeForJWTID(jwtID, jwtScopeToGRPC(jwtScope))
-	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
-		Active: true, TokenType: idputil.TokenTypeBearer, Scope: jwtScopeToGRPC(opaqueTokenScope)})
+	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{Active: true,
+		TokenType: idputil.TokenTypeBearer, Scope: jwtScopeToGRPC(opaqueTokenScope)})
 
 	tests := []struct {
 		name                    string
@@ -183,40 +192,18 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			},
 		},
 		{
-			name: "ok, dynamic introspection endpoint, introspected token is expired JWT",
-			tokenToIntrospect: idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
-				RegisteredClaims: jwtgo.RegisteredClaims{
-					Issuer:    httpIDPSrv.URL(),
-					Subject:   uuid.NewString(),
-					ID:        uuid.NewString(),
-					ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(-time.Hour)),
-				},
-			}),
+			name:                  "ok, dynamic introspection endpoint, introspected token is expired JWT",
+			tokenToIntrospect:     expiredJWT,
 			expectedResult:        idptoken.IntrospectionResult{Active: false},
 			expectedHTTPSrvCalled: true,
 		},
 		{
-			name: "ok, dynamic introspection endpoint, introspected token is JWT",
-			tokenToIntrospect: idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
-				RegisteredClaims: jwtgo.RegisteredClaims{
-					Issuer:    jwtIssuer,
-					Subject:   jwtSubject,
-					ID:        jwtID,
-					ExpiresAt: jwtExpiresAtInFuture,
-				},
-			}),
+			name:              "ok, dynamic introspection endpoint, introspected token is JWT",
+			tokenToIntrospect: validJWT,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
 				TokenType: idputil.TokenTypeBearer,
-				Claims: jwt.Claims{
-					RegisteredClaims: jwtgo.RegisteredClaims{
-						Issuer:    jwtIssuer,
-						Subject:   jwtSubject,
-						ID:        jwtID,
-						ExpiresAt: jwtExpiresAtInFuture,
-					},
-					Scope: jwtScope,
-				},
+				Claims:    jwt.Claims{RegisteredClaims: validJWTClaims, Scope: validJWTScope},
 			},
 			expectedHTTPSrvCalled: true,
 		},
@@ -352,21 +339,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 	require.NoError(t, idpSrv.StartAndWaitForReady(time.Second))
 	defer func() { _ = idpSrv.Shutdown(context.Background()) }()
 
-	jwtParser := jwt.NewParser(jwks.NewClient())
-	require.NoError(t, jwtParser.AddTrustedIssuerURL(idpSrv.URL()))
-	serverIntrospector.JWTParser = jwtParser
-
-	jwtExpiresAtInFuture := jwtgo.NewNumericDate(time.Now().Add(time.Hour))
-	jwtIssuer := idpSrv.URL()
-	jwtSubject := uuid.NewString()
-	jwtID := uuid.NewString()
-	jwtScope := []jwt.AccessPolicy{{
-		TenantUUID:        uuid.NewString(),
-		ResourceNamespace: "account-server",
-		Role:              "account_viewer",
-		ResourcePath:      "resource-" + uuid.NewString(),
-	}}
-
+	// Expired JWT
 	expiredJWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    idpSrv.URL(),
@@ -375,15 +348,41 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(-time.Hour)),
 		},
 	})
-	activeJWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
-		RegisteredClaims: jwtgo.RegisteredClaims{
-			Issuer:    jwtIssuer,
-			Subject:   jwtSubject,
-			ID:        jwtID,
-			ExpiresAt: jwtExpiresAtInFuture,
-		},
-	})
+	serverIntrospector.SetResultForToken(expiredJWT, idptoken.IntrospectionResult{Active: false})
 
+	// Valid JWTs with scope
+	validJWT1Scope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "account_viewer",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	validJWT1Claims := jwtgo.RegisteredClaims{
+		Issuer:    idpSrv.URL(),
+		Subject:   uuid.NewString(),
+		ID:        uuid.NewString(),
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(2 * time.Hour)),
+	}
+	valid1JWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{RegisteredClaims: validJWT1Claims})
+	serverIntrospector.SetResultForToken(valid1JWT, idptoken.IntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{RegisteredClaims: validJWT1Claims, Scope: validJWT1Scope}})
+	validJWT2Scope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "account_viewer",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	validJWT2Claims := jwtgo.RegisteredClaims{
+		Issuer:    idpSrv.URL(),
+		Subject:   uuid.NewString(),
+		ID:        uuid.NewString(),
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	valid2JWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{RegisteredClaims: validJWT2Claims})
+	serverIntrospector.SetResultForToken(valid2JWT, idptoken.IntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{RegisteredClaims: validJWT2Claims, Scope: validJWT2Scope}})
+
+	// Opaque tokens
 	opaqueToken1 := "opaque-token-" + uuid.NewString()
 	opaqueToken2 := "opaque-token-" + uuid.NewString()
 	opaqueToken3 := "opaque-token-" + uuid.NewString()
@@ -399,8 +398,6 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 		Role:              "admin",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
-
-	serverIntrospector.SetScopeForJWTID(jwtID, jwtScope)
 	serverIntrospector.SetResultForToken(opaqueToken1, idptoken.IntrospectionResult{
 		Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueToken1Scope}})
 	serverIntrospector.SetResultForToken(opaqueToken2, idptoken.IntrospectionResult{
@@ -411,7 +408,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 		name              string
 		introspectorOpts  idptoken.IntrospectorOpts
 		tokens            []string
-		expectedSrvCalled []bool
+		expectedSrvCounts []map[string]uint64
 		expectedResult    []idptoken.IntrospectionResult
 		checkError        []func(t *gotesting.T, err error)
 		checkIntrospector func(t *gotesting.T, introspector *idptoken.Introspector)
@@ -420,7 +417,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 		{
 			name:              "error, token is not introspectable",
 			tokens:            []string{"", "opaque-token"},
-			expectedSrvCalled: []bool{false, false},
+			expectedSrvCounts: []map[string]uint64{{}, {}},
 			introspectorOpts: idptoken.IntrospectorOpts{
 				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
 				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
@@ -438,57 +435,87 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			checkIntrospector: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 0, introspector.ClaimsCache.Len(context.Background()))
 				require.Equal(t, 0, introspector.NegativeCache.Len(context.Background()))
+				require.Equal(t, 0, introspector.EndpointDiscoveryCache.Len(context.Background()))
 			},
 		},
 		{
 			name: "ok, dynamic introspection endpoint, introspected token is expired JWT",
 			introspectorOpts: idptoken.IntrospectorOpts{
-				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
-				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
+				ClaimsCache:            idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache:          idptoken.IntrospectorCacheOpts{Enabled: true},
+				EndpointDiscoveryCache: idptoken.IntrospectorCacheOpts{Enabled: true},
 			},
-			tokens:            repeat(expiredJWT, 2),
-			expectedSrvCalled: []bool{true, false},
-			expectedResult:    []idptoken.IntrospectionResult{{Active: false}, {Active: false}},
+			tokens: repeat(expiredJWT, 2),
+			expectedSrvCounts: []map[string]uint64{
+				{idptest.TokenIntrospectionEndpointPath: 1, idptest.OpenIDConfigurationPath: 1},
+				{},
+			},
+			expectedResult: []idptoken.IntrospectionResult{{Active: false}, {Active: false}},
 			checkIntrospector: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 0, introspector.ClaimsCache.Len(context.Background()))
 				require.Equal(t, 1, introspector.NegativeCache.Len(context.Background()))
+				require.Equal(t, 1, introspector.EndpointDiscoveryCache.Len(context.Background()))
 			},
 		},
 		{
 			name: "ok, dynamic introspection endpoint, introspected token is JWT",
 			introspectorOpts: idptoken.IntrospectorOpts{
-				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
-				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
+				ClaimsCache:            idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache:          idptoken.IntrospectorCacheOpts{Enabled: true},
+				EndpointDiscoveryCache: idptoken.IntrospectorCacheOpts{Enabled: true},
 			},
-			tokens:            repeat(activeJWT, 2),
-			expectedSrvCalled: []bool{true, false},
-			expectedResult: repeat(idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims: jwt.Claims{
-					RegisteredClaims: jwtgo.RegisteredClaims{
-						Issuer:    jwtIssuer,
-						Subject:   jwtSubject,
-						ID:        jwtID,
-						ExpiresAt: jwtExpiresAtInFuture,
-					},
-					Scope: jwtScope,
+			tokens: []string{valid1JWT, valid1JWT, valid2JWT, valid2JWT},
+			expectedSrvCounts: []map[string]uint64{
+				{idptest.TokenIntrospectionEndpointPath: 1, idptest.OpenIDConfigurationPath: 1},
+				{},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{},
+			},
+			expectedResult: []idptoken.IntrospectionResult{
+				{
+					Active:    true,
+					TokenType: idputil.TokenTypeBearer,
+					Claims:    jwt.Claims{RegisteredClaims: validJWT1Claims, Scope: validJWT1Scope},
 				},
-			}, 2),
+				{
+					Active:    true,
+					TokenType: idputil.TokenTypeBearer,
+					Claims:    jwt.Claims{RegisteredClaims: validJWT1Claims, Scope: validJWT1Scope},
+				},
+				{
+					Active:    true,
+					TokenType: idputil.TokenTypeBearer,
+					Claims:    jwt.Claims{RegisteredClaims: validJWT2Claims, Scope: validJWT2Scope},
+				},
+				{
+					Active:    true,
+					TokenType: idputil.TokenTypeBearer,
+					Claims:    jwt.Claims{RegisteredClaims: validJWT2Claims, Scope: validJWT2Scope},
+				},
+			},
 			checkIntrospector: func(t *gotesting.T, introspector *idptoken.Introspector) {
-				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
+				require.Equal(t, 2, introspector.ClaimsCache.Len(context.Background()))
 				require.Equal(t, 0, introspector.NegativeCache.Len(context.Background()))
+				require.Equal(t, 1, introspector.EndpointDiscoveryCache.Len(context.Background()))
 			},
 		},
 		{
 			name: "ok, static introspection endpoint, introspected token is opaque",
 			introspectorOpts: idptoken.IntrospectorOpts{
-				HTTPEndpoint:  idpSrv.URL() + idptest.TokenIntrospectionEndpointPath,
-				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
-				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
+				HTTPEndpoint:           idpSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+				ClaimsCache:            idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache:          idptoken.IntrospectorCacheOpts{Enabled: true},
+				EndpointDiscoveryCache: idptoken.IntrospectorCacheOpts{Enabled: true},
 			},
-			tokens:            []string{opaqueToken1, opaqueToken1, opaqueToken2, opaqueToken2, opaqueToken3, opaqueToken3},
-			expectedSrvCalled: []bool{true, false, true, false, true, false},
+			tokens: []string{opaqueToken1, opaqueToken1, opaqueToken2, opaqueToken2, opaqueToken3, opaqueToken3},
+			expectedSrvCounts: []map[string]uint64{
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 0},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 0},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 0},
+			},
 			expectedResult: []idptoken.IntrospectionResult{
 				{Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueToken1Scope}},
 				{Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueToken1Scope}},
@@ -500,17 +527,24 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			checkIntrospector: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 2, introspector.ClaimsCache.Len(context.Background()))
 				require.Equal(t, 1, introspector.NegativeCache.Len(context.Background()))
+				require.Equal(t, 0, introspector.EndpointDiscoveryCache.Len(context.Background()))
 			},
 		},
 		{
-			name: "ok, cache has ttl",
+			name: "ok, static introspection endpoint, cache has ttl",
 			introspectorOpts: idptoken.IntrospectorOpts{
-				HTTPEndpoint:  idpSrv.URL() + idptest.TokenIntrospectionEndpointPath,
-				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true, TTL: 100 * time.Millisecond},
-				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true, TTL: 100 * time.Millisecond},
+				HTTPEndpoint:           idpSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+				ClaimsCache:            idptoken.IntrospectorCacheOpts{Enabled: true, TTL: 100 * time.Millisecond},
+				NegativeCache:          idptoken.IntrospectorCacheOpts{Enabled: true, TTL: 100 * time.Millisecond},
+				EndpointDiscoveryCache: idptoken.IntrospectorCacheOpts{Enabled: true, TTL: 100 * time.Millisecond},
 			},
-			tokens:            []string{opaqueToken1, opaqueToken1, opaqueToken3, opaqueToken3},
-			expectedSrvCalled: []bool{true, true, true, true},
+			tokens: []string{opaqueToken1, opaqueToken1, opaqueToken3, opaqueToken3},
+			expectedSrvCounts: []map[string]uint64{
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+				{idptest.TokenIntrospectionEndpointPath: 1},
+			},
 			expectedResult: []idptoken.IntrospectionResult{
 				{Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueToken1Scope}},
 				{Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueToken1Scope}},
@@ -520,6 +554,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			checkIntrospector: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
 				require.Equal(t, 1, introspector.NegativeCache.Len(context.Background()))
+				require.Equal(t, 0, introspector.EndpointDiscoveryCache.Len(context.Background()))
 			},
 			delay: 200 * time.Millisecond,
 		},
@@ -532,7 +567,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			require.NoError(t, introspector.AddTrustedIssuerURL(idpSrv.URL()))
 
 			for i, token := range tt.tokens {
-				serverIntrospector.ResetCallsInfo()
+				idpSrv.ResetServedCounts()
 
 				result, introspectErr := introspector.IntrospectToken(context.Background(), token)
 				if i < len(tt.checkError) {
@@ -542,8 +577,12 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 					require.Equal(t, tt.expectedResult[i], result)
 				}
 
-				require.Equal(t, tt.expectedSrvCalled[i], serverIntrospector.Called)
-				if tt.expectedSrvCalled[i] {
+				require.Equal(t, tt.expectedSrvCounts[i][idptest.TokenIntrospectionEndpointPath],
+					idpSrv.ServedCounts()[idptest.TokenIntrospectionEndpointPath])
+				require.Equal(t, tt.expectedSrvCounts[i][idptest.OpenIDConfigurationPath],
+					idpSrv.ServedCounts()[idptest.OpenIDConfigurationPath])
+
+				if tt.expectedSrvCounts[i][idptest.TokenIntrospectionEndpointPath] > 0 {
 					require.Equal(t, token, serverIntrospector.LastIntrospectedToken)
 					require.Equal(t, "Bearer "+accessToken, serverIntrospector.LastAuthorizationHeader)
 					require.Equal(t, url.Values{"token": {token}}, serverIntrospector.LastFormValues)
