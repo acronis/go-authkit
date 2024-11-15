@@ -362,14 +362,9 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	if jwtHeaderBytes, err = i.jwtParser.DecodeSegment(token[:jwtHeaderEndIdx]); err != nil {
 		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("decode JWT header: %w", err))
 	}
-	headerDecoder := json.NewDecoder(bytes.NewReader(jwtHeaderBytes))
-	headerDecoder.UseNumber()
-	jwtHeader := make(map[string]interface{})
-	if err = headerDecoder.Decode(&jwtHeader); err != nil {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("unmarshal JWT header: %w", err))
-	}
-	if typ, ok := jwtHeader["typ"].(string); !ok || !strings.EqualFold(typ, idputil.JWTTypeAccessToken) {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("token type is not %s", idputil.JWTTypeAccessToken))
+	jwtHeader, err := parserJWTHeader(jwtHeaderBytes)
+	if err != nil {
+		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("parse JWT header: %w", err))
 	}
 	if !checkIntrospectionRequiredByJWTHeader(jwtHeader) {
 		return nil, ErrTokenIntrospectionNotNeeded
@@ -548,6 +543,24 @@ func makeTokenNotIntrospectableError(inner error) error {
 
 func makeBearerToken(token string) string {
 	return "Bearer " + token
+}
+
+func parserJWTHeader(b []byte) (map[string]interface{}, error) {
+	headerDecoder := json.NewDecoder(bytes.NewReader(b))
+	headerDecoder.UseNumber()
+	jwtHeader := make(map[string]interface{})
+	if err := headerDecoder.Decode(&jwtHeader); err != nil {
+		return nil, err
+	}
+	typVal, exists := jwtHeader["typ"]
+	if !exists {
+		return nil, errors.New(`"typ" field is missing`)
+	}
+	if typ, ok := typVal.(string); ok &&
+		(strings.EqualFold(typ, idputil.JWTTypeAccessToken) || strings.EqualFold(typ, idputil.JWTTypeAppAccessToken)) {
+		return jwtHeader, nil
+	}
+	return nil, fmt.Errorf(`"typ" field is not %q or %q`, idputil.JWTTypeAccessToken, idputil.JWTTypeAppAccessToken)
 }
 
 // checkIntrospectionRequiredByJWTHeader checks if introspection is required by JWT header.

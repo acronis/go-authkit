@@ -8,6 +8,7 @@ package idptoken_test
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	gotesting "testing"
 	"time"
@@ -86,6 +87,11 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	validJWT := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{RegisteredClaims: validJWTClaims})
 	httpServerIntrospector.SetResultForToken(validJWT, idptoken.IntrospectionResult{Active: true,
 		TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{RegisteredClaims: validJWTClaims, Scope: validJWTScope}})
+	validJWTWithAppTyp := idptest.MustMakeTokenStringWithHeader(jwt.Claims{
+		RegisteredClaims: validJWTClaims,
+	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"typ": idputil.JWTTypeAppAccessToken})
+	httpServerIntrospector.SetResultForToken(validJWTWithAppTyp, idptoken.IntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{RegisteredClaims: validJWTClaims, Scope: validJWTScope}})
 
 	// Opaque token
 	opaqueToken := "opaque-token-" + uuid.NewString()
@@ -134,6 +140,17 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			checkError: func(t *gotesting.T, err error) {
 				require.ErrorIs(t, err, idptoken.ErrTokenNotIntrospectable)
 				require.ErrorContains(t, err, "decode JWT header")
+			},
+		},
+		{
+			name: `error, dynamic introspection endpoint, invalid "typ" field in JWT header`,
+			tokenToIntrospect: idptest.MustMakeTokenStringWithHeader(jwt.Claims{
+				RegisteredClaims: validJWTClaims,
+			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"typ": "invalid"}),
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorIs(t, err, idptoken.ErrTokenNotIntrospectable)
+				require.ErrorContains(t, err, fmt.Sprintf(
+					`"typ" field is not %q or %q`, idputil.JWTTypeAccessToken, idputil.JWTTypeAppAccessToken))
 			},
 		},
 		{
@@ -200,6 +217,16 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		{
 			name:              "ok, dynamic introspection endpoint, introspected token is JWT",
 			tokenToIntrospect: validJWT,
+			expectedResult: idptoken.IntrospectionResult{
+				Active:    true,
+				TokenType: idputil.TokenTypeBearer,
+				Claims:    jwt.Claims{RegisteredClaims: validJWTClaims, Scope: validJWTScope},
+			},
+			expectedHTTPSrvCalled: true,
+		},
+		{
+			name:              `ok, dynamic introspection endpoint, introspected token is JWT, "typ" is "application/at+jwt"`,
+			tokenToIntrospect: validJWTWithAppTyp,
 			expectedResult: idptoken.IntrospectionResult{
 				Active:    true,
 				TokenType: idputil.TokenTypeBearer,
