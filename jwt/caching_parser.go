@@ -28,8 +28,8 @@ type CachingParserOpts struct {
 
 // ClaimsCache is an interface that must be implemented by used cache implementations.
 type ClaimsCache interface {
-	Get(key [sha256.Size]byte) (*Claims, bool)
-	Add(key [sha256.Size]byte, value *Claims)
+	Get(key [sha256.Size]byte) (Claims, bool)
+	Add(key [sha256.Size]byte, claims Claims)
 	Purge()
 	Len() int
 }
@@ -37,7 +37,8 @@ type ClaimsCache interface {
 // CachingParser uses the functionality of Parser to parse JWT, but stores resulted Claims objects in the cache.
 type CachingParser struct {
 	*Parser
-	ClaimsCache ClaimsCache
+	ClaimsCache     ClaimsCache
+	claimsValidator *jwtgo.Validator
 }
 
 func NewCachingParser(keysProvider KeysProvider) (*CachingParser, error) {
@@ -51,13 +52,14 @@ func NewCachingParserWithOpts(
 	if opts.CacheMaxEntries == 0 {
 		opts.CacheMaxEntries = DefaultClaimsCacheMaxEntries
 	}
-	cache, err := lrucache.New[[sha256.Size]byte, *Claims](opts.CacheMaxEntries, promMetrics.TokenClaimsCache)
+	cache, err := lrucache.New[[sha256.Size]byte, Claims](opts.CacheMaxEntries, promMetrics.TokenClaimsCache)
 	if err != nil {
 		return nil, err
 	}
 	return &CachingParser{
-		Parser:      NewParserWithOpts(keysProvider, opts.ParserOpts),
-		ClaimsCache: cache,
+		Parser:          NewParserWithOpts(keysProvider, opts.ParserOpts),
+		ClaimsCache:     cache,
+		claimsValidator: jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
 	}, nil
 }
 
@@ -73,7 +75,7 @@ func stringToBytesUnsafe(s string) []byte {
 }
 
 // Parse calls Parse method of embedded original Parser but stores result into cache.
-func (cp *CachingParser) Parse(ctx context.Context, token string) (*Claims, error) {
+func (cp *CachingParser) Parse(ctx context.Context, token string) (Claims, error) {
 	key := getTokenHash(stringToBytesUnsafe(token))
 	cachedClaims, foundInCache, validationErr := cp.getFromCacheAndValidateIfNeeded(key)
 	if foundInCache {
@@ -90,13 +92,13 @@ func (cp *CachingParser) Parse(ctx context.Context, token string) (*Claims, erro
 	return claims, nil
 }
 
-func (cp *CachingParser) getFromCacheAndValidateIfNeeded(key [sha256.Size]byte) (claims *Claims, found bool, err error) {
+func (cp *CachingParser) getFromCacheAndValidateIfNeeded(key [sha256.Size]byte) (claims Claims, found bool, err error) {
 	cachedClaims, found := cp.ClaimsCache.Get(key)
 	if !found {
 		return nil, false, nil
 	}
 	if !cp.Parser.skipClaimsValidation {
-		if err = cp.Parser.claimsValidator.Validate(cachedClaims); err != nil {
+		if err = cp.claimsValidator.Validate(cachedClaims); err != nil {
 			return nil, true, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
 		}
 		if err = cp.Parser.customValidator(cachedClaims); err != nil {

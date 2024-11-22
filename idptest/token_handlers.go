@@ -37,7 +37,7 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	h.servedCount.Add(1)
 
-	var claims jwt.Claims
+	var claims jwt.Claims = &jwt.DefaultClaims{}
 	if h.ClaimsProvider != nil {
 		var err error
 		if claims, err = h.ClaimsProvider.Provide(r); err != nil {
@@ -49,14 +49,16 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if claims.ID == "" {
-		claims.ID = uuid.NewString()
-	}
-	if claims.ExpiresAt == nil {
-		claims.ExpiresAt = jwtgo.NewNumericDate(time.Now().Add(time.Hour)) // By default, token expires in 1 hour.
-	}
-	if claims.Issuer == "" {
-		claims.Issuer = h.Issuer
+	if defaultClaims, ok := claims.(*jwt.DefaultClaims); ok {
+		if defaultClaims.ID == "" {
+			defaultClaims.ID = uuid.NewString()
+		}
+		if defaultClaims.ExpiresAt == nil {
+			defaultClaims.ExpiresAt = jwtgo.NewNumericDate(time.Now().Add(time.Hour)) // By default, token expires in 1 hour.
+		}
+		if defaultClaims.Issuer == "" {
+			defaultClaims.Issuer = h.Issuer
+		}
 	}
 
 	token, err := MakeTokenStringWithHeader(claims, TestKeyID, GetTestRSAPrivateKey(), nil)
@@ -65,7 +67,12 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresIn := claims.ExpiresAt.Unix() - time.Now().UTC().Unix()
+	expiresAt, expiresAtErr := claims.GetExpirationTime()
+	if expiresAtErr != nil {
+		http.Error(rw, expiresAtErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	expiresIn := expiresAt.Unix() - time.Now().UTC().Unix()
 	if expiresIn < 0 {
 		expiresIn = 0
 	}
@@ -137,9 +144,11 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 		}
 	} else {
 		if claims, err := h.JWTParser.Parse(r.Context(), token); err == nil {
-			introspectResult.Active = true
-			introspectResult.TokenType = idputil.TokenTypeBearer
-			introspectResult.Claims = *claims
+			introspectResult = &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: *claims.(*jwt.DefaultClaims),
+			}
 		}
 	}
 

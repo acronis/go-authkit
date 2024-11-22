@@ -14,6 +14,7 @@ import (
 	"github.com/mendsley/gojwk"
 
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/jwt"
 )
 
 // SignToken signs token with key.
@@ -33,7 +34,7 @@ func MustSignToken(token *jwtgo.Token, rsaPrivateKey interface{}) string {
 
 // MakeTokenStringWithHeader create test signed token with claims and headers.
 func MakeTokenStringWithHeader(
-	claims jwtgo.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},
+	claims jwt.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},
 ) (string, error) {
 	token := jwtgo.NewWithClaims(jwtgo.SigningMethodRS256, claims)
 	token.Header["typ"] = idputil.JWTTypeAccessToken
@@ -47,7 +48,7 @@ func MakeTokenStringWithHeader(
 // MustMakeTokenStringWithHeader create test signed token with claims and headers.
 // It panics if error occurs.
 func MustMakeTokenStringWithHeader(
-	claims jwtgo.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},
+	claims jwt.Claims, kid string, rsaPrivateKey interface{}, header map[string]interface{},
 ) string {
 	token, err := MakeTokenStringWithHeader(claims, kid, rsaPrivateKey, header)
 	if err != nil {
@@ -57,13 +58,13 @@ func MustMakeTokenStringWithHeader(
 }
 
 // MakeTokenString create signed token with claims.
-func MakeTokenString(claims jwtgo.Claims, kid string, rsaPrivateKey interface{}) (string, error) {
+func MakeTokenString(claims jwt.Claims, kid string, rsaPrivateKey interface{}) (string, error) {
 	return MakeTokenStringWithHeader(claims, kid, rsaPrivateKey, nil)
 }
 
 // MustMakeTokenString create signed token with claims.
 // It panics if error occurs.
-func MustMakeTokenString(claims jwtgo.Claims, kid string, rsaPrivateKey interface{}) string {
+func MustMakeTokenString(claims jwt.Claims, kid string, rsaPrivateKey interface{}) string {
 	token, err := MakeTokenStringWithHeader(claims, kid, rsaPrivateKey, nil)
 	if err != nil {
 		panic(err)
@@ -80,14 +81,14 @@ func GetTestRSAPrivateKey() crypto.PrivateKey {
 }
 
 // MakeTokenStringSignedWithTestKey create test token signed with the pre-defined private key (TestKeyID) for testing.
-func MakeTokenStringSignedWithTestKey(claims jwtgo.Claims) (string, error) {
+func MakeTokenStringSignedWithTestKey(claims jwt.Claims) (string, error) {
 	return MakeTokenStringWithHeader(claims, TestKeyID, GetTestRSAPrivateKey(), nil)
 }
 
 // MustMakeTokenStringSignedWithTestKey create test token signed
 // with the pre-defined private key (TestKeyID) for testing.
 // It panics if error occurs.
-func MustMakeTokenStringSignedWithTestKey(claims jwtgo.Claims) string {
+func MustMakeTokenStringSignedWithTestKey(claims jwt.Claims) string {
 	token, err := MakeTokenStringSignedWithTestKey(claims)
 	if err != nil {
 		panic(err)

@@ -59,7 +59,8 @@ message AccessTokenScope {
 }
 
 message IntrospectTokenResponse {
-  reserved 12 to 100;
+  reserved 14 to 100;
+  reserved 8, 9, 10;
   bool active = 1;
   string token_type = 2;
   int64 exp = 3;
@@ -67,8 +68,7 @@ message IntrospectTokenResponse {
   string jti = 5;
   string iss = 6;
   string sub = 7;
-  string sub_type = 8;
-  string client_id = 9;
-  string owner_tenant_uuid = 10; // API client owner tenant UUID.
   repeated AccessTokenScope scope = 11;
+  int64 nbf = 12;
+  int64 iat = 13;
 }

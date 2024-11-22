@@ -18,7 +18,7 @@ import (
 	"github.com/acronis/go-appkit/log"
 
 	"github.com/acronis/go-authkit"
-	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/jwt"
 )
 
 const (
@@ -49,8 +49,8 @@ func runApp() error {
 	}
 
 	// Create token introspector.
-	introspectionScopeFilter := []idptoken.IntrospectionScopeFilterAccessPolicy{{ResourceNamespace: serviceAccessPolicy}}
-	tokenIntrospector, err := authkit.NewTokenIntrospector(cfg.Auth, introspectionTokenProvider{}, introspectionScopeFilter)
+	tokenIntrospector, err := authkit.NewTokenIntrospector(cfg.Auth,
+		introspectionTokenProvider{}, jwt.ScopeFilter{{ResourceNamespace: serviceAccessPolicy}})
 	if err != nil {
 		return fmt.Errorf("create token introspector: %w", err)
 	}
@@ -79,12 +79,14 @@ func runApp() error {
 	// "/" endpoint will be available for all authenticated users.
 	srvMux.Handle("/", authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
-		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", jwtClaims.Subject)))
+		tokenSubject, _ := jwtClaims.GetSubject()                 // error is always nil here unless custom claims are used
+		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", tokenSubject)))
 	})))
 	// "/admin" endpoint will be available only for users with the "admin" role.
 	srvMux.Handle("/admin", authZMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // Get JWT claims from the request context.
-		_, _ = rw.Write([]byte(fmt.Sprintf("Hi, %s", jwtClaims.Subject)))
+		tokenSubject, _ := jwtClaims.GetSubject()                 // error is always nil here unless custom claims are used
+		_, _ = rw.Write([]byte(fmt.Sprintf("Hi, %s", tokenSubject)))
 	})))
 	if err = http.ListenAndServe(":8080", middleware.Logging(logger)(srvMux)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)

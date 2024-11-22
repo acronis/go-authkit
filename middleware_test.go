@@ -23,7 +23,7 @@ import (
 
 type mockJWTAuthMiddlewareNextHandler struct {
 	called    int
-	jwtClaims *jwt.Claims
+	jwtClaims jwt.Claims
 }
 
 func (h *mockJWTAuthMiddlewareNextHandler) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
@@ -33,12 +33,12 @@ func (h *mockJWTAuthMiddlewareNextHandler) ServeHTTP(_ http.ResponseWriter, r *h
 
 type mockJWTParser struct {
 	parseCalled    int
-	claimsToReturn *jwt.Claims
+	claimsToReturn jwt.Claims
 	errToReturn    error
 	passedToken    string
 }
 
-func (p *mockJWTParser) Parse(_ context.Context, token string) (*jwt.Claims, error) {
+func (p *mockJWTParser) Parse(_ context.Context, token string) (jwt.Claims, error) {
 	p.parseCalled++
 	p.passedToken = token
 	return p.claimsToReturn, p.errToReturn
@@ -96,7 +96,7 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 	t.Run("ok", func(t *testing.T) {
 		const issuer = "my-idp.com"
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
@@ -108,12 +108,14 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		require.Equal(t, 1, parser.parseCalled)
 		require.Equal(t, 1, next.called)
 		require.NotNil(t, next.jwtClaims)
-		require.Equal(t, issuer, next.jwtClaims.Issuer)
+		nextIssuer, err := next.jwtClaims.GetIssuer()
+		require.NoError(t, err)
+		require.Equal(t, issuer, nextIssuer)
 	})
 
 	t.Run("introspection failed", func(t *testing.T) {
 		const issuer = "my-idp.com"
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
 		introspector := &mockTokenIntrospector{errToReturn: errors.New("introspection failed")}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -130,7 +132,7 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 	t.Run("introspection is not needed", func(t *testing.T) {
 		const issuer = "my-idp.com"
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
 		introspector := &mockTokenIntrospector{errToReturn: idptoken.ErrTokenIntrospectionNotNeeded}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -143,13 +145,14 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		require.Equal(t, 1, introspector.introspectCalled)
 		require.Equal(t, 1, parser.parseCalled)
 		require.Equal(t, 1, next.called)
-		require.NotNil(t, next.jwtClaims)
-		require.Equal(t, issuer, next.jwtClaims.Issuer)
+		nextIssuer, err := next.jwtClaims.GetIssuer()
+		require.NoError(t, err)
+		require.Equal(t, issuer, nextIssuer)
 	})
 
 	t.Run("ok, token is not introspectable", func(t *testing.T) {
 		const issuer = "my-idp.com"
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
 		introspector := &mockTokenIntrospector{errToReturn: idptoken.ErrTokenNotIntrospectable}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -163,13 +166,15 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		require.Equal(t, 1, parser.parseCalled)
 		require.Equal(t, 1, next.called)
 		require.NotNil(t, next.jwtClaims)
-		require.Equal(t, issuer, next.jwtClaims.Issuer)
+		nextIssuer, err := next.jwtClaims.GetIssuer()
+		require.NoError(t, err)
+		require.Equal(t, issuer, nextIssuer)
 	})
 
 	t.Run("authentication failed, token is introspected but inactive", func(t *testing.T) {
 		const issuer = "my-idp.com"
 		parser := &mockJWTParser{}
-		introspector := &mockTokenIntrospector{resultToReturn: idptoken.IntrospectionResult{Active: false}}
+		introspector := &mockTokenIntrospector{resultToReturn: &idptoken.DefaultIntrospectionResult{Active: false}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
@@ -186,7 +191,8 @@ func TestJWTAuthMiddleware(t *testing.T) {
 	t.Run("ok, token is introspected and active", func(t *testing.T) {
 		const issuer = "my-idp.com"
 		parser := &mockJWTParser{}
-		introspector := &mockTokenIntrospector{resultToReturn: idptoken.IntrospectionResult{Active: true, Claims: jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}}
+		introspector := &mockTokenIntrospector{resultToReturn: &idptoken.DefaultIntrospectionResult{
+			Active: true, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
@@ -199,7 +205,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		require.Equal(t, 0, parser.parseCalled)
 		require.Equal(t, 1, next.called)
 		require.NotNil(t, next.jwtClaims)
-		require.Equal(t, issuer, next.jwtClaims.Issuer)
+		nextIssuer, err := next.jwtClaims.GetIssuer()
+		require.NoError(t, err)
+		require.Equal(t, issuer, nextIssuer)
 	})
 }
 
@@ -207,7 +215,7 @@ func TestJWTAuthMiddlewareWithVerifyAccess(t *testing.T) {
 	const errDomain = "TestDomain"
 
 	t.Run("authorization failed", func(t *testing.T) {
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
@@ -224,7 +232,7 @@ func TestJWTAuthMiddlewareWithVerifyAccess(t *testing.T) {
 
 	t.Run("ok", func(t *testing.T) {
 		scope := []jwt.AccessPolicy{{ResourceNamespace: "my-service", Role: "admin"}}
-		parser := &mockJWTParser{claimsToReturn: &jwt.Claims{Scope: scope}}
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{Scope: scope}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
@@ -237,6 +245,6 @@ func TestJWTAuthMiddlewareWithVerifyAccess(t *testing.T) {
 		require.Equal(t, 1, parser.parseCalled)
 		require.Equal(t, 1, next.called)
 		require.NotNil(t, next.jwtClaims)
-		require.EqualValues(t, scope, next.jwtClaims.Scope)
+		require.EqualValues(t, scope, next.jwtClaims.GetScope())
 	})
 }

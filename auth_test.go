@@ -44,7 +44,7 @@ func TestNewJWTParser(t *gotesting.T) {
 	require.NoError(t, idpSrv.StartAndWaitForReady(time.Second))
 	defer func() { _ = idpSrv.Shutdown(context.Background()) }()
 
-	claims := &jwt.Claims{
+	claims := &jwt.DefaultClaims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    idpSrv.URL(),
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(10 * time.Second)),
@@ -53,7 +53,7 @@ func TestNewJWTParser(t *gotesting.T) {
 	}
 	token := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	claimsWithNamedIssuer := &jwt.Claims{
+	claimsWithNamedIssuer := &jwt.DefaultClaims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(10 * time.Second)),
@@ -66,7 +66,7 @@ func TestNewJWTParser(t *gotesting.T) {
 		name           string
 		token          string
 		cfg            *Config
-		expectedClaims *jwt.Claims
+		expectedClaims jwt.Claims
 		checkFn        func(t *gotesting.T, jwtParser JWTParser)
 	}{
 		{
@@ -149,7 +149,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 	require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
 	defer func() { grpcIDPSrv.GracefulStop() }()
 
-	claims := &jwt.Claims{
+	claims := &jwt.DefaultClaims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    httpIDPSrv.URL(),
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(10 * time.Second)),
@@ -158,7 +158,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 	}
 	token := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
-	claimsWithNamedIssuer := &jwt.Claims{
+	claimsWithNamedIssuer := &jwt.DefaultClaims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(10 * time.Second)),
@@ -174,8 +174,8 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 		Role:              "admin",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
-	httpServerIntrospector.SetResultForToken(opaqueToken, idptoken.IntrospectionResult{
-		Active: true, TokenType: idputil.TokenTypeBearer, Claims: jwt.Claims{Scope: opaqueTokenScope}})
+	httpServerIntrospector.SetResultForToken(opaqueToken, &idptoken.DefaultIntrospectionResult{
+		Active: true, TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope}})
 	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
 		Active: true, TokenType: idputil.TokenTypeBearer, Scope: []*pb.AccessTokenScope{
 			{
@@ -197,10 +197,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			name:  "new token introspector, dynamic endpoint, trusted issuers map",
 			cfg:   &Config{JWT: JWTConfig{TrustedIssuers: map[string]string{testIss: httpIDPSrv.URL()}}, Introspection: IntrospectionConfig{Enabled: true}},
 			token: tokenWithNamedIssuer,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    *claimsWithNamedIssuer,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: *claimsWithNamedIssuer,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
@@ -211,10 +211,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			name:  "new token introspector, dynamic endpoint, trusted issuer urls",
 			cfg:   &Config{JWT: JWTConfig{TrustedIssuerURLs: []string{httpIDPSrv.URL()}}, Introspection: IntrospectionConfig{Enabled: true}},
 			token: token,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    *claims,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: *claims,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
@@ -228,10 +228,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				Introspection: IntrospectionConfig{Enabled: true, ClaimsCache: IntrospectionCacheConfig{Enabled: true}},
 			},
 			token: tokenWithNamedIssuer,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    *claimsWithNamedIssuer,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: *claimsWithNamedIssuer,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
@@ -245,10 +245,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				Introspection: IntrospectionConfig{Enabled: true, ClaimsCache: IntrospectionCacheConfig{Enabled: true}},
 			},
 			token: token,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    *claims,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: *claims,
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
@@ -265,10 +265,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				},
 			},
 			token: opaqueToken,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    jwt.Claims{Scope: opaqueTokenScope},
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
@@ -291,10 +291,10 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				},
 			},
 			token: opaqueToken,
-			expectedResult: idptoken.IntrospectionResult{
-				Active:    true,
-				TokenType: idputil.TokenTypeBearer,
-				Claims:    jwt.Claims{Scope: opaqueTokenScope},
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
@@ -323,7 +323,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 }
 
 func TestNewVerifyAccessByJWTRoles(t *gotesting.T) {
-	jwtClaims := &jwt.Claims{Scope: []jwt.AccessPolicy{
+	jwtClaims := &jwt.DefaultClaims{Scope: []jwt.AccessPolicy{
 		{ResourceNamespace: "policy_manager", Role: "admin"},
 		{ResourceNamespace: "scan_service", Role: "admin"},
 		{Role: "backup_user"},
@@ -347,7 +347,7 @@ func TestNewVerifyAccessByJWTRoles(t *gotesting.T) {
 }
 
 func TestNewVerifyAccessByJWTRolesMaker(t *gotesting.T) {
-	jwtClaims := &jwt.Claims{Scope: []jwt.AccessPolicy{
+	jwtClaims := &jwt.DefaultClaims{Scope: []jwt.AccessPolicy{
 		{ResourceNamespace: "policy_manager", Role: "admin"},
 		{ResourceNamespace: "scan_service", Role: "admin"},
 		{Role: "backup_user"},

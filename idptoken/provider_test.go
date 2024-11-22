@@ -439,7 +439,7 @@ type claimsProviderWithExpiration struct {
 }
 
 func (d *claimsProviderWithExpiration) Provide(_ *http.Request) (jwt.Claims, error) {
-	claims := jwt.Claims{
+	claims := &jwt.DefaultClaims{
 		// nolint:staticcheck // StandardClaims are used here for test purposes
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			ID:       uuid.NewString(),
@@ -452,8 +452,6 @@ func (d *claimsProviderWithExpiration) Provide(_ *http.Request) (jwt.Claims, err
 				Role:       "tenant:viewer",
 			},
 		},
-		Version: 1,
-		UserID:  "1",
 	}
 
 	if d.ExpTime <= 0 {

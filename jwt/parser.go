@@ -37,6 +37,7 @@ type ParserOpts struct {
 	ExpectedAudience              []string
 	TrustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 	LoggerProvider                func(ctx context.Context) log.FieldLogger
+	ClaimsTemplate                Claims
 }
 
 type audienceMatcher func(aud string) bool
@@ -48,8 +49,8 @@ type TrustedIssNotFoundFallback func(ctx context.Context, p *Parser, iss string)
 // Parser is an object for parsing, validation and verification JWT.
 type Parser struct {
 	parser               *jwtgo.Parser
-	claimsValidator      *jwtgo.Validator
-	customValidator      func(claims *Claims) error
+	claimsTemplate       Claims
+	customValidator      func(claims Claims) error
 	skipClaimsValidation bool
 	keysProvider         KeysProvider
 
@@ -74,15 +75,19 @@ func NewParserWithOpts(keysProvider KeysProvider, opts ParserOpts) *Parser {
 	if opts.SkipClaimsValidation {
 		parserOpts = append(parserOpts, jwtgo.WithoutClaimsValidation())
 	}
+	var claimsTemplate Claims = &DefaultClaims{}
+	if opts.ClaimsTemplate != nil {
+		claimsTemplate = opts.ClaimsTemplate
+	}
 	return &Parser{
 		parser:                        jwtgo.NewParser(parserOpts...),
-		claimsValidator:               jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
 		customValidator:               makeCustomAudienceValidator(opts.RequireAudience, audienceMatchers),
 		skipClaimsValidation:          opts.SkipClaimsValidation,
 		keysProvider:                  keysProvider,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
 		loggerProvider:                opts.LoggerProvider,
+		claimsTemplate:                claimsTemplate,
 	}
 }
 
@@ -102,10 +107,10 @@ func (p *Parser) GetURLForIssuer(issuer string) (string, bool) {
 }
 
 // Parse parses, validates and verifies passed token (it's string representation). Parsed claims is returned.
-func (p *Parser) Parse(ctx context.Context, token string) (*Claims, error) {
+func (p *Parser) Parse(ctx context.Context, token string) (Claims, error) {
 	keyFunc := p.getKeyFunc(ctx)
-	claims := validatableClaims{customValidator: p.customValidator}
-	if _, err := p.parser.ParseWithClaims(token, &claims, keyFunc); err != nil {
+	claims := p.claimsTemplate.Clone()
+	if _, err := p.parser.ParseWithClaims(token, claims, keyFunc); err != nil {
 		if !errors.Is(err, jwtgo.ErrTokenSignatureInvalid) {
 			return nil, err
 		}
@@ -116,7 +121,12 @@ func (p *Parser) Parse(ctx context.Context, token string) (*Claims, error) {
 			return nil, err
 		}
 
-		issuerURL, issuerURLFound := p.getURLForIssuerWithCallback(ctx, claims.Issuer)
+		issuer, issuerErr := claims.GetIssuer()
+		if issuerErr != nil {
+			return nil, err // original error is more important
+		}
+
+		issuerURL, issuerURLFound := p.getURLForIssuerWithCallback(ctx, issuer)
 		if !issuerURLFound {
 			return nil, err
 		}
@@ -127,12 +137,18 @@ func (p *Parser) Parse(ctx context.Context, token string) (*Claims, error) {
 			return nil, err
 		}
 
-		if _, err = p.parser.ParseWithClaims(token, &claims, keyFunc); err != nil {
+		if _, err = p.parser.ParseWithClaims(token, claims, keyFunc); err != nil {
 			return nil, err
 		}
 	}
 
-	return &claims.Claims, nil
+	if !p.skipClaimsValidation {
+		if err := p.customValidator(claims); err != nil {
+			return nil, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
+		}
+	}
+
+	return claims, nil
 }
 
 func (p *Parser) getKeyFunc(ctx context.Context) func(token *jwtgo.Token) (interface{}, error) {
@@ -147,13 +163,20 @@ func (p *Parser) getKeyFunc(ctx context.Context) func(token *jwtgo.Token) (inter
 			if kid, found := token.Header["kid"]; found {
 				kidStr = kid.(string)
 			}
-			claims := token.Claims.(*validatableClaims)
-			if claims.Issuer == "" {
-				return nil, &IssuerMissingError{&claims.Claims}
+			claims, ok := token.Claims.(Claims)
+			if !ok {
+				return nil, fmt.Errorf("claims type %T does not implement Claims interface", token.Claims)
 			}
-			issuerURL, issuerURLFound := p.getURLForIssuerWithCallback(ctx, claims.Issuer)
+			issuer, issuerErr := claims.GetIssuer()
+			if issuerErr != nil {
+				return nil, issuerErr
+			}
+			if issuer == "" {
+				return nil, &IssuerMissingError{claims}
+			}
+			issuerURL, issuerURLFound := p.getURLForIssuerWithCallback(ctx, issuer)
 			if !issuerURLFound {
-				return nil, &IssuerUntrustedError{&claims.Claims}
+				return nil, &IssuerUntrustedError{claims, issuer}
 			}
 			return p.keysProvider.GetRSAPublicKey(ctx, issuerURL, kidStr)
 
@@ -174,60 +197,13 @@ func (p *Parser) getURLForIssuerWithCallback(ctx context.Context, issuer string)
 	return p.trustedIssuerNotFoundFallback(ctx, p, issuer)
 }
 
-// Claims represents an extended version of JWT claims.
-type Claims struct {
-	jwtgo.RegisteredClaims
-	Scope           []AccessPolicy `json:"scope,omitempty"`
-	Version         int            `json:"ver,omitempty"`
-	UserID          string         `json:"uid,omitempty"`
-	OriginID        string         `json:"origin,omitempty"`
-	ClientID        string         `json:"client_id,omitempty"`
-	TOTPTime        int64          `json:"totp_time,omitempty"`
-	SubType         string         `json:"sub_type,omitempty"`
-	OwnerTenantUUID string         `json:"owner_tuid,omitempty"`
-}
-
-// AccessPolicy represents a single access policy which specifies access rights to a tenant or resource
-// in the scope of a resource server.
-type AccessPolicy struct {
-	// TenantID is a unique identifier of tenant for which access is granted (if resource is not specified)
-	// or which the resource is owned by (if resource is specified).
-	TenantID string `json:"tid,omitempty"`
-
-	// TenantUUID is a UUID of tenant for which access is granted (if the resource is not specified)
-	// or which the resource is owned by (if the resource is specified).
-	TenantUUID string `json:"tuid,omitempty"`
-
-	// ResourceServerID is a unique resource server instance or cluster ID.
-	ResourceServerID string `json:"rs,omitempty"`
-
-	// ResourceNamespace is a namespace to which resource belongs within resource server.
-	// E.g.: account-server, storage-manager, task-manager, alert-manager, etc.
-	ResourceNamespace string `json:"rn,omitempty"`
-
-	// ResourcePath is a unique identifier of or path to a single resource or resource collection
-	// in the scope of the resource server and namespace.
-	ResourcePath string `json:"rp,omitempty"`
-
-	// Role determines what actions are allowed to be performed on the specified tenant or resource.
-	Role string `json:"role,omitempty"`
-}
-
-type validatableClaims struct {
-	Claims
-	customValidator func(c *Claims) error
-}
-
-func (v *validatableClaims) Validate() error {
-	if v.customValidator != nil {
-		return v.customValidator(&v.Claims)
-	}
-	return nil
-}
-
-func makeCustomAudienceValidator(requireAudience bool, audienceMatchers []audienceMatcher) func(c *Claims) error {
-	return func(c *Claims) error {
-		if len(c.Audience) == 0 {
+func makeCustomAudienceValidator(requireAudience bool, audienceMatchers []audienceMatcher) func(c Claims) error {
+	return func(c Claims) error {
+		audience, err := c.GetAudience()
+		if err != nil {
+			return err
+		}
+		if len(audience) == 0 {
 			if requireAudience {
 				return fmt.Errorf("%w: %w", jwtgo.ErrTokenRequiredClaimMissing, &AudienceMissingError{c})
 			}
@@ -238,12 +214,12 @@ func makeCustomAudienceValidator(requireAudience bool, audienceMatchers []audien
 			return nil
 		}
 		for i := range audienceMatchers {
-			for j := range c.Audience {
-				if audienceMatchers[i](c.Audience[j]) {
+			for j := range audience {
+				if audienceMatchers[i](audience[j]) {
 					return nil
 				}
 			}
 		}
-		return fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidAudience, &AudienceNotExpectedError{c})
+		return fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidAudience, &AudienceNotExpectedError{c, audience})
 	}
 }

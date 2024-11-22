@@ -24,7 +24,7 @@ import (
 )
 
 type JWTParser interface {
-	Parse(ctx context.Context, token string) (*jwt.Claims, error)
+	Parse(ctx context.Context, token string) (jwt.Claims, error)
 }
 
 type HTTPServerTokenIntrospectorMock struct {
@@ -69,7 +69,7 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	m.LastFormValues = r.Form
 
 	if m.LastAuthorizationHeader != "Bearer "+m.accessTokenForIntrospection {
-		return idptoken.IntrospectionResult{}, idptest.ErrUnauthorized
+		return nil, idptest.ErrUnauthorized
 	}
 
 	if result, ok := m.introspectionResults[tokenToKey(token)]; ok {
@@ -78,10 +78,11 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 
 	claims, err := m.JWTParser.Parse(r.Context(), token)
 	if err != nil {
-		return idptoken.IntrospectionResult{Active: false}, nil
+		return &idptoken.DefaultIntrospectionResult{Active: false}, nil
 	}
-	result := idptoken.IntrospectionResult{Active: true, TokenType: idputil.TokenTypeBearer, Claims: *claims}
-	if scopes, ok := m.jwtScopes[claims.ID]; ok {
+	defaultClaims := claims.(*jwt.DefaultClaims)
+	result := &idptoken.DefaultIntrospectionResult{Active: true, TokenType: idputil.TokenTypeBearer, DefaultClaims: *defaultClaims}
+	if scopes, ok := m.jwtScopes[defaultClaims.ID]; ok {
 		result.Scope = scopes
 	}
 	return result, nil
@@ -152,19 +153,17 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	if err != nil {
 		return &pb.IntrospectTokenResponse{Active: false}, nil
 	}
+	defaultClaims := claims.(*jwt.DefaultClaims)
 	result := &pb.IntrospectTokenResponse{
-		Active:          true,
-		TokenType:       idputil.TokenTypeBearer,
-		Exp:             claims.ExpiresAt.Unix(),
-		Aud:             claims.Audience,
-		Jti:             claims.ID,
-		Iss:             claims.Issuer,
-		Sub:             claims.Subject,
-		SubType:         claims.SubType,
-		ClientId:        claims.ClientID,
-		OwnerTenantUuid: claims.OwnerTenantUUID,
+		Active:    true,
+		TokenType: idputil.TokenTypeBearer,
+		Exp:       defaultClaims.ExpiresAt.Unix(),
+		Aud:       defaultClaims.Audience,
+		Jti:       defaultClaims.ID,
+		Iss:       defaultClaims.Issuer,
+		Sub:       defaultClaims.Subject,
 	}
-	if scopes, ok := m.scopes[claims.ID]; ok {
+	if scopes, ok := m.scopes[defaultClaims.ID]; ok {
 		result.Scope = scopes
 	}
 	return result, nil

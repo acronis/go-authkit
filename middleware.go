@@ -49,7 +49,7 @@ const (
 
 // JWTParser is an interface for parsing string representation of JWT.
 type JWTParser interface {
-	Parse(ctx context.Context, token string) (*jwt.Claims, error)
+	Parse(ctx context.Context, token string) (jwt.Claims, error)
 }
 
 // CachingJWTParser does the same as JWTParser but stores parsed JWT claims in cache.
@@ -67,13 +67,13 @@ type jwtAuthHandler struct {
 	next              http.Handler
 	errorDomain       string
 	jwtParser         JWTParser
-	verifyAccess      func(r *http.Request, claims *jwt.Claims) bool
+	verifyAccess      func(r *http.Request, claims jwt.Claims) bool
 	tokenIntrospector TokenIntrospector
 	loggerProvider    func(ctx context.Context) log.FieldLogger
 }
 
 type jwtAuthMiddlewareOpts struct {
-	verifyAccess      func(r *http.Request, claims *jwt.Claims) bool
+	verifyAccess      func(r *http.Request, claims jwt.Claims) bool
 	tokenIntrospector TokenIntrospector
 	loggerProvider    func(ctx context.Context) log.FieldLogger
 }
@@ -82,7 +82,7 @@ type jwtAuthMiddlewareOpts struct {
 type JWTAuthMiddlewareOption func(options *jwtAuthMiddlewareOpts)
 
 // WithJWTAuthMiddlewareVerifyAccess is an option to set a function that verifies access for JWTAuthMiddleware.
-func WithJWTAuthMiddlewareVerifyAccess(verifyAccess func(r *http.Request, claims *jwt.Claims) bool) JWTAuthMiddlewareOption {
+func WithJWTAuthMiddlewareVerifyAccess(verifyAccess func(r *http.Request, claims jwt.Claims) bool) JWTAuthMiddlewareOption {
 	return func(options *jwtAuthMiddlewareOpts) {
 		options.verifyAccess = verifyAccess
 	}
@@ -137,7 +137,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var jwtClaims *jwt.Claims
+	var jwtClaims jwt.Claims
 	if h.tokenIntrospector != nil {
 		if introspectionResult, err := h.tokenIntrospector.IntrospectToken(reqCtx, bearerToken); err != nil {
 			switch {
@@ -159,13 +159,13 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			if !introspectionResult.Active {
+			if !introspectionResult.IsActive() {
 				h.logger(reqCtx).Warn("token was successfully introspected, but it is not active")
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, h.logger(reqCtx))
 				return
 			}
-			jwtClaims = &introspectionResult.Claims
+			jwtClaims = introspectionResult.GetClaims()
 			h.logger(reqCtx).AtLevel(log.LevelDebug, func(logFunc log.LogFunc) {
 				logFunc("token was successfully introspected")
 			})
@@ -210,17 +210,17 @@ func GetBearerTokenFromRequest(r *http.Request) string {
 }
 
 // NewContextWithJWTClaims creates a new context with JWT claims.
-func NewContextWithJWTClaims(ctx context.Context, jwtClaims *jwt.Claims) context.Context {
+func NewContextWithJWTClaims(ctx context.Context, jwtClaims jwt.Claims) context.Context {
 	return context.WithValue(ctx, ctxKeyJWTClaims, jwtClaims)
 }
 
 // GetJWTClaimsFromContext extracts JWT claims from the context.
-func GetJWTClaimsFromContext(ctx context.Context) *jwt.Claims {
+func GetJWTClaimsFromContext(ctx context.Context) jwt.Claims {
 	value := ctx.Value(ctxKeyJWTClaims)
 	if value == nil {
 		return nil
 	}
-	return value.(*jwt.Claims)
+	return value.(jwt.Claims)
 }
 
 // NewContextWithBearerToken creates a new context with token.
