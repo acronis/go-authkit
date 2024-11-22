@@ -13,6 +13,7 @@ import (
 	"time"
 
 	jwtgo "github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/idptest"
@@ -30,26 +31,41 @@ func TestJWTParser_Parse(t *testing.T) {
 	defer issuerConfigServer.Close()
 
 	t.Run("ok", func(t *testing.T) {
-		claims := &jwt.Claims{
+		claims := &jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
 				Issuer:    testIss,
 				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
 			},
-			Scope:    []jwt.AccessPolicy{{Role: "company_admin"}},
-			TOTPTime: time.Now().Unix(),
-			SubType:  "task_manager",
+			Scope: []jwt.AccessPolicy{{Role: "company_admin"}},
 		}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 		parsedClaims, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.NoError(t, err)
-		require.Equal(t, claims.Scope, parsedClaims.Scope)
-		require.Equal(t, claims.TOTPTime, parsedClaims.TOTPTime)
-		require.Equal(t, claims.SubType, parsedClaims.SubType)
+		require.Equal(t, claims, parsedClaims)
+	})
+
+	t.Run("ok, custom claims", func(t *testing.T) {
+		claims := &CustomClaims{
+			DefaultClaims: jwt.DefaultClaims{
+				RegisteredClaims: jwtgo.RegisteredClaims{
+					Issuer:    testIss,
+					ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
+				},
+				Scope: []jwt.AccessPolicy{{Role: "company_admin"}},
+			},
+			CustomField: uuid.NewString(),
+		}
+		parser := jwt.NewParserWithOpts(jwks.NewCachingClient(), jwt.ParserOpts{ClaimsTemplate: &CustomClaims{}})
+		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
+		tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
+		parsedClaims, err := parser.Parse(context.Background(), tokenString)
+		require.NoError(t, err)
+		require.Equal(t, claims, parsedClaims)
 	})
 
 	t.Run("ok for empty kid", func(t *testing.T) {
-		claims := &jwt.Claims{
+		claims := &jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
 				Issuer:    testIss,
 				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
@@ -63,7 +79,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	})
 
 	t.Run("ok for trusted issuer url (glob pattern)", func(t *testing.T) {
-		claims := &jwt.Claims{
+		claims := &jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
 				Issuer:    issuerConfigServer.URL,
 				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
@@ -86,7 +102,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("ok for expected audience (glob pattern)", func(t *testing.T) {
 		for _, aud := range []string{"region1.cloud.com", "region2.cloud.com"} {
-			claims := &jwt.Claims{
+			claims := &jwt.DefaultClaims{
 				RegisteredClaims: jwtgo.RegisteredClaims{
 					Audience:  []string{aud},
 					Issuer:    issuerConfigServer.URL,
@@ -112,7 +128,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	})
 
 	t.Run("unsigned jwt", func(t *testing.T) {
-		claims := &jwt.Claims{
+		claims := jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
 				Issuer:    testIss,
 				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
@@ -129,7 +145,7 @@ func TestJWTParser_Parse(t *testing.T) {
 	})
 
 	t.Run("jwt issuer missing", func(t *testing.T) {
-		claims := &jwt.Claims{
+		claims := &jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{Audience: []string{"https://cloud.acronis.com"}},
 		}
 		parser := jwt.NewParser(jwks.NewCachingClient())
@@ -142,7 +158,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("jwt has untrusted issuer", func(t *testing.T) {
 		const issuer = "untrusted-issuer"
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
+		claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenUnverifiable)
@@ -153,7 +169,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("jwt has untrusted issuer url", func(t *testing.T) {
 		const issuer = "https://3rd-party-idp.com"
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
+		claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		require.NoError(t, parser.AddTrustedIssuerURL("https://*.acronis.com"))
 		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
@@ -165,7 +181,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("jwt has untrusted issuer url, callback adds it to trusted", func(t *testing.T) {
 		var callbackCallCount int
-		claims := &jwt.Claims{
+		claims := &jwt.DefaultClaims{
 			RegisteredClaims: jwtgo.RegisteredClaims{
 				Audience:  []string{issuerConfigServer.URL},
 				Issuer:    issuerConfigServer.URL,
@@ -195,40 +211,40 @@ func TestJWTParser_Parse(t *testing.T) {
 	})
 
 	t.Run("jwt exp is missing", func(t *testing.T) {
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss}}
+		claims := jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss}}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
-		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
+		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(&claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
 		require.ErrorIs(t, err, jwtgo.ErrTokenRequiredClaimMissing)
 	})
 
 	t.Run("jwt expired", func(t *testing.T) {
 		expiresAt := time.Now().Add(-time.Second)
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(expiresAt)}}
+		claims := jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(expiresAt)}}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
-		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
+		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(&claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
 		require.ErrorIs(t, err, jwtgo.ErrTokenExpired)
 	})
 
 	t.Run("jwt not valid yet", func(t *testing.T) {
 		notBefore := time.Now().Add(time.Minute)
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{
+		claims := jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
 			NotBefore: jwtgo.NewNumericDate(notBefore),
 		}}
 		parser := jwt.NewParser(jwks.NewCachingClient())
 		parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
-		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(claims))
+		_, err := parser.Parse(context.Background(), idptest.MustMakeTokenStringSignedWithTestKey(&claims))
 		require.ErrorIs(t, err, jwtgo.ErrTokenInvalidClaims)
 		require.ErrorIs(t, err, jwtgo.ErrTokenNotValidYet)
 	})
 
 	t.Run("required jwt audience is missing", func(t *testing.T) {
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{
+		claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
 		}}
@@ -246,7 +262,7 @@ func TestJWTParser_Parse(t *testing.T) {
 
 	t.Run("jwt audience is not expected", func(t *testing.T) {
 		const audience = "not-expected-audience"
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{
+		claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{
 			Audience:  []string{audience},
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
@@ -273,8 +289,8 @@ func TestJWTParser_Parse(t *testing.T) {
 
 		const cacheUpdateMinInterval = time.Second
 
-		claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
-		tokenString, err := idptest.MakeTokenString(claims, "737c5114f09b5ed05276bd4b520245982f7fb29f", idptest.GetTestRSAPrivateKey())
+		claims := jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
+		tokenString, err := idptest.MakeTokenString(&claims, "737c5114f09b5ed05276bd4b520245982f7fb29f", idptest.GetTestRSAPrivateKey())
 		require.NoError(t, err)
 		jwksClient := jwks.NewCachingClientWithOpts(jwks.CachingClientOpts{CacheUpdateMinInterval: cacheUpdateMinInterval})
 		parser := jwt.NewParser(jwksClient)

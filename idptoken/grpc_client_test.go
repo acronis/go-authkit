@@ -26,17 +26,21 @@ import (
 func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	tokenExpiresIn := time.Hour
 	tokenExpiresAt := time.Now().Add(time.Hour)
-	tokenV1 := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
-		RegisteredClaims: jwtgo.RegisteredClaims{
-			Subject:   "test-subject",
-			ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
+	tokenV1 := idptest.MustMakeTokenStringSignedWithTestKey(&VersionedClaims{
+		DefaultClaims: jwt.DefaultClaims{
+			RegisteredClaims: jwtgo.RegisteredClaims{
+				Subject:   "test-subject",
+				ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
+			},
 		},
 		Version: 1,
 	})
-	tokenV2 := idptest.MustMakeTokenStringSignedWithTestKey(jwt.Claims{
-		RegisteredClaims: jwtgo.RegisteredClaims{
-			Subject:   "test-subject",
-			ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
+	tokenV2 := idptest.MustMakeTokenStringSignedWithTestKey(&VersionedClaims{
+		DefaultClaims: jwt.DefaultClaims{
+			RegisteredClaims: jwtgo.RegisteredClaims{
+				Subject:   "test-subject",
+				ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
+			},
 		},
 		Version: 2,
 	})
@@ -101,5 +105,17 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 				require.Equal(t, tt.expectedRequest.TokenVersion, grpcServerTokenCreator.LastRequest.TokenVersion)
 			}
 		})
+	}
+}
+
+type VersionedClaims struct {
+	jwt.DefaultClaims
+	Version int `json:"ver"`
+}
+
+func (c *VersionedClaims) Clone() jwt.Claims {
+	return &VersionedClaims{
+		DefaultClaims: *c.DefaultClaims.Clone().(*jwt.DefaultClaims),
+		Version:       c.Version,
 	}
 }

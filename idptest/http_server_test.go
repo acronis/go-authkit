@@ -110,7 +110,7 @@ func TestHTTPServerDefault(t *gotesting.T) {
 	respBody, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
-	var introspectionRespData idptoken.IntrospectionResult
+	var introspectionRespData idptoken.DefaultIntrospectionResult
 	require.NoError(t, json.Unmarshal(respBody, &introspectionRespData))
 	require.True(t, introspectionRespData.Active)
 	require.Equal(t, idpSrv.URL(), introspectionRespData.Issuer)

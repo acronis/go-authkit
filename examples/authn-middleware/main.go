@@ -48,8 +48,9 @@ func runApp() error {
 
 	srvMux := http.NewServeMux()
 	srvMux.Handle("/", authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
-		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", jwtClaims.Subject)))
+		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context())       // get JWT claims from the request context
+		tokenSubject, _ := jwtClaims.GetSubject()                       // error is always nil here unless custom claims are used
+		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", tokenSubject))) // use the subject to greet the user
 	})))
 	if err = http.ListenAndServe(":8080", middleware.Logging(logger)(srvMux)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)

@@ -74,16 +74,17 @@ type demoTokenIntrospector struct {
 
 func (dti *demoTokenIntrospector) IntrospectToken(r *http.Request, token string) (idptoken.IntrospectionResult, error) {
 	if bearerToken := authkit.GetBearerTokenFromRequest(r); bearerToken != "access-token-with-introspection-permission" {
-		return idptoken.IntrospectionResult{}, idptest.ErrUnauthorized
+		return nil, idptest.ErrUnauthorized
 	}
 	claims, err := dti.jwtParser.Parse(r.Context(), token)
 	if err != nil {
-		return idptoken.IntrospectionResult{Active: false}, nil
+		return &idptoken.DefaultIntrospectionResult{Active: false}, nil
 	}
-	if claims.Subject == "admin2" {
-		claims.Scope = append(claims.Scope, jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
+	defClaims := claims.(*jwt.DefaultClaims) // type assertion is safe here since we don't use custom claims
+	if defClaims.Subject == "admin2" {
+		defClaims.Scope = append(defClaims.Scope, jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
 	}
-	return idptoken.IntrospectionResult{Active: true, TokenType: "Bearer", Claims: *claims}, nil
+	return &idptoken.DefaultIntrospectionResult{Active: true, TokenType: "Bearer", DefaultClaims: *defClaims}, nil
 }
 
 type demoClaimsProvider struct {
@@ -92,9 +93,9 @@ type demoClaimsProvider struct {
 func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
 	username, password, ok := r.BasicAuth()
 	if !ok {
-		return jwt.Claims{}, idptest.ErrUnauthorized
+		return nil, idptest.ErrUnauthorized
 	}
-	var claims jwt.Claims
+	claims := &jwt.DefaultClaims{}
 	switch {
 	case username == "user" && password == "user-pwd":
 		claims.Subject = "user"
@@ -104,7 +105,7 @@ func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
 	case username == "admin2" && password == "admin2-pwd":
 		claims.Subject = "admin2"
 	default:
-		return jwt.Claims{}, idptest.ErrUnauthorized
+		return nil, idptest.ErrUnauthorized
 	}
 	return claims, nil
 }

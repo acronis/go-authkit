@@ -88,23 +88,25 @@ func (dti *demoGRPCTokenIntrospector) IntrospectToken(
 	if authMeta != "Bearer "+accessTokenWithIntrospectionPermission {
 		return nil, idptest.ErrUnauthorized
 	}
+
 	claims, err := dti.jwtParser.Parse(ctx, req.Token)
 	if err != nil {
 		return &pb.IntrospectTokenResponse{Active: false}, nil
 	}
-	if claims.Subject == "admin2" {
-		claims.Scope = append(claims.Scope, jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
+	defClaims := claims.(*jwt.DefaultClaims) // type assertion is safe here since we don't use custom claims
+	if defClaims.Subject == "admin2" {
+		defClaims.Scope = append(claims.GetScope(), jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
 	}
 	resp := &pb.IntrospectTokenResponse{
 		Active:    true,
 		TokenType: "Bearer",
-		Sub:       claims.Subject,
-		Exp:       claims.ExpiresAt.Unix(),
-		Aud:       claims.Audience,
-		Iss:       claims.Issuer,
-		Scope:     make([]*pb.AccessTokenScope, 0, len(claims.Scope)),
+		Sub:       defClaims.Subject,
+		Exp:       defClaims.ExpiresAt.Unix(),
+		Aud:       defClaims.Audience,
+		Iss:       defClaims.Issuer,
+		Scope:     make([]*pb.AccessTokenScope, 0, len(defClaims.Scope)),
 	}
-	for _, policy := range claims.Scope {
+	for _, policy := range defClaims.Scope {
 		resp.Scope = append(resp.Scope, &pb.AccessTokenScope{
 			ResourceNamespace: policy.ResourceNamespace,
 			RoleName:          policy.Role,

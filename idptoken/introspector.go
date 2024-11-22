@@ -70,6 +70,15 @@ var ErrUnauthenticated = errors.New("request is unauthenticated")
 // For example, it could be analyzed and then added to the list by calling AddTrustedIssuerURL method.
 type TrustedIssNotFoundFallback func(ctx context.Context, i *Introspector, iss string) (issURL string, issFound bool)
 
+// IntrospectionResult is an interface that must be implemented by introspection result implementations.
+// By default, DefaultIntrospectionResult is used.
+type IntrospectionResult interface {
+	IsActive() bool
+	GetTokenType() string
+	GetClaims() jwt.Claims
+	Clone() IntrospectionResult
+}
+
 // IntrospectionTokenProvider is an interface for getting access token for doing introspection.
 // The token should have introspection permission.
 type IntrospectionTokenProvider interface {
@@ -77,13 +86,15 @@ type IntrospectionTokenProvider interface {
 	Invalidate()
 }
 
-// IntrospectionScopeFilterAccessPolicy is a single access policy for filtering scope during introspection.
-type IntrospectionScopeFilterAccessPolicy struct {
-	ResourceNamespace string
+// IntrospectionCache is an interface that must be implemented by used cache implementations.
+// The cache is used for storing results of access token introspection.
+type IntrospectionCache interface {
+	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionCacheItem, bool)
+	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionCacheItem)
+	Remove(ctx context.Context, key [sha256.Size]byte) bool
+	Purge(ctx context.Context)
+	Len(ctx context.Context) int
 }
-
-// IntrospectionScopeFilter is a filter for scope during introspection.
-type IntrospectionScopeFilter []IntrospectionScopeFilterAccessPolicy
 
 // IntrospectorOpts is a set of options for creating Introspector.
 type IntrospectorOpts struct {
@@ -107,7 +118,7 @@ type IntrospectorOpts struct {
 
 	// ScopeFilter is a filter for scope during introspection.
 	// If it's set, then only access policies in scope that match at least one of the filtering policies will be returned.
-	ScopeFilter IntrospectionScopeFilter
+	ScopeFilter jwt.ScopeFilter
 
 	// LoggerProvider is a function that provides a logger for the Introspector.
 	LoggerProvider func(ctx context.Context) log.FieldLogger
@@ -128,6 +139,11 @@ type IntrospectorOpts struct {
 
 	// EndpointDiscoveryCache is a configuration of how endpoint discovery cache will be used.
 	EndpointDiscoveryCache IntrospectorCacheOpts
+
+	// ResultTemplate is a custom introspection result
+	// that will be used instead of DefaultIntrospectionResult for unmarshalling introspection response.
+	// It must implement IntrospectionResult interface.
+	ResultTemplate IntrospectionResult
 }
 
 // IntrospectorCacheOpts is a configuration of how cache will be used.
@@ -148,10 +164,10 @@ type Introspector struct {
 	HTTPClient *http.Client
 
 	// ClaimsCache is a cache for storing claims of introspected active tokens.
-	ClaimsCache IntrospectionClaimsCache
+	ClaimsCache IntrospectionCache
 
 	// NegativeCache is a cache for storing info about tokens that are not active.
-	NegativeCache IntrospectionNegativeCache
+	NegativeCache IntrospectionCache
 
 	// EndpointDiscoveryCache is a cache for storing OpenID configuration.
 	EndpointDiscoveryCache IntrospectionEndpointDiscoveryCache
@@ -160,11 +176,13 @@ type Introspector struct {
 	accessTokenProviderInvalidatedAt atomic.Value
 	accessTokenScope                 []string
 
+	resultTemplate IntrospectionResult
+
 	jwtParser *jwtgo.Parser
 
 	httpEndpoint string
 
-	scopeFilter               IntrospectionScopeFilter
+	scopeFilter               jwt.ScopeFilter
 	scopeFilterFormURLEncoded string
 
 	loggerProvider func(ctx context.Context) log.FieldLogger
@@ -179,35 +197,35 @@ type Introspector struct {
 	endpointDiscoveryCacheTTL time.Duration
 }
 
-// IntrospectionResult is a struct for introspection result.
-type IntrospectionResult struct {
+// DefaultIntrospectionResult is a default implementation of IntrospectionResult.
+type DefaultIntrospectionResult struct {
 	Active    bool   `json:"active"`
 	TokenType string `json:"token_type,omitempty"`
-	jwt.Claims
+	jwt.DefaultClaims
 }
 
-// ApplyScopeFilter filters the scope of the introspection result
-// and preserves policies only that match the filter if it's not empty.
-// It's used just in case when the scope filtering is not done on the introspection endpoint side.
-func (ir *IntrospectionResult) ApplyScopeFilter(filter IntrospectionScopeFilter) {
-	if len(filter) == 0 {
-		return
+// IsActive returns true if the token is active.
+func (ir *DefaultIntrospectionResult) IsActive() bool {
+	return ir.Active
+}
+
+// GetTokenType returns the token type.
+func (ir *DefaultIntrospectionResult) GetTokenType() string {
+	return ir.TokenType
+}
+
+// GetClaims returns the claims of the token.
+func (ir *DefaultIntrospectionResult) GetClaims() jwt.Claims {
+	return &ir.DefaultClaims
+}
+
+// Clone returns a deep copy of the introspection result.
+func (ir *DefaultIntrospectionResult) Clone() IntrospectionResult {
+	return &DefaultIntrospectionResult{
+		Active:        ir.Active,
+		TokenType:     ir.TokenType,
+		DefaultClaims: *ir.DefaultClaims.Clone().(*jwt.DefaultClaims),
 	}
-	n := 0
-	for j := range ir.Claims.Scope {
-		matched := false
-		for k := range filter {
-			if ir.Claims.Scope[j].ResourceNamespace == filter[k].ResourceNamespace {
-				matched = true
-				break
-			}
-		}
-		if matched {
-			ir.Claims.Scope[n] = ir.Claims.Scope[j]
-			n++
-		}
-	}
-	ir.Claims.Scope = ir.Claims.Scope[:n]
 }
 
 // NewIntrospector creates a new Introspector with the given token provider.
@@ -234,11 +252,11 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, tokenIntrospectorPromSource)
 
-	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache, promMetrics)
+	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache, DefaultIntrospectionClaimsCacheMaxEntries, promMetrics)
 	if opts.ClaimsCache.TTL == 0 {
 		opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
 	}
-	negativeCache := makeIntrospectionNegativeCache(opts.NegativeCache, promMetrics)
+	negativeCache := makeIntrospectionClaimsCache(opts.NegativeCache, DefaultIntrospectionNegativeCacheMaxEntries, promMetrics)
 	if opts.NegativeCache.TTL == 0 {
 		opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
 	}
@@ -247,9 +265,18 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		opts.EndpointDiscoveryCache.TTL = DefaultIntrospectionEndpointDiscoveryCacheTTL
 	}
 
+	var resultTemplate IntrospectionResult = &DefaultIntrospectionResult{}
+	if opts.ResultTemplate != nil {
+		if opts.GRPCClient != nil {
+			return nil, errors.New("custom introspection result template is not supported when gRPC is used")
+		}
+		resultTemplate = opts.ResultTemplate
+	}
+
 	return &Introspector{
 		accessTokenProvider:           accessTokenProvider,
 		accessTokenScope:              opts.AccessTokenScope,
+		resultTemplate:                resultTemplate,
 		jwtParser:                     jwtgo.NewParser(),
 		loggerProvider:                opts.LoggerProvider,
 		GRPCClient:                    opts.GRPCClient,
@@ -276,33 +303,32 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 
 	if cachedItem, ok := i.ClaimsCache.Get(ctx, cacheKey); ok {
 		now := time.Now()
-		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(now) &&
-			(cachedItem.Claims.ExpiresAt == nil || cachedItem.Claims.ExpiresAt.Time.After(now)) {
-			return IntrospectionResult{Active: true, TokenType: cachedItem.TokenType,
-				Claims: cloneClaims(cachedItem.Claims)}, nil
+		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(now) {
+			cachedClaimsExpiresAt, err := cachedItem.IntrospectionResult.GetClaims().GetExpirationTime()
+			if err != nil {
+				return nil, fmt.Errorf("get expiration time from cached claims: %w", err)
+			}
+			if cachedClaimsExpiresAt == nil || cachedClaimsExpiresAt.Time.After(now) {
+				return cachedItem.IntrospectionResult.Clone(), nil
+			}
 		}
-	}
-
-	if c, ok := i.NegativeCache.Get(ctx, cacheKey); ok {
-		if c.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
-			return IntrospectionResult{Active: false}, nil
+	} else if cachedItem, ok = i.NegativeCache.Get(ctx, cacheKey); ok {
+		if cachedItem.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
+			return cachedItem.IntrospectionResult.Clone(), nil
 		}
 	}
 
 	introspectionResult, err := i.introspectToken(ctx, token)
 	if err != nil {
-		return IntrospectionResult{}, err
+		return nil, err
 	}
-	if introspectionResult.Active {
-		introspectionResult.ApplyScopeFilter(i.scopeFilter)
-		claims := cloneClaims(&introspectionResult.Claims)
-		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionClaimsCacheItem{
-			Claims:    &claims,
-			TokenType: introspectionResult.TokenType,
-			CreatedAt: time.Now(),
-		})
+	if introspectionResult.IsActive() {
+		introspectionResult.GetClaims().ApplyScopeFilter(i.scopeFilter)
+		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{
+			IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
 	} else {
-		i.NegativeCache.Add(ctx, cacheKey, IntrospectionNegativeCacheItem{CreatedAt: time.Now()})
+		i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{
+			IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
 	}
 
 	return introspectionResult, nil
@@ -321,7 +347,7 @@ func (i *Introspector) AddTrustedIssuerURL(issURL string) error {
 func (i *Introspector) introspectToken(ctx context.Context, token string) (IntrospectionResult, error) {
 	introspectFn, err := i.makeIntrospectFuncForToken(ctx, token)
 	if err != nil {
-		return IntrospectionResult{}, err
+		return nil, err
 	}
 
 	result, err := introspectFn(ctx, token)
@@ -330,7 +356,7 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 	}
 
 	if !errors.Is(err, ErrUnauthenticated) {
-		return IntrospectionResult{}, err
+		return nil, err
 	}
 
 	// If introspection is unauthorized, then invalidate access token provider's cache and try again.
@@ -342,7 +368,7 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 		i.accessTokenProviderInvalidatedAt.Store(now)
 		return introspectFn(ctx, token)
 	}
-	return IntrospectionResult{}, err
+	return nil, err
 }
 
 type introspectFunc func(ctx context.Context, token string) (IntrospectionResult, error)
@@ -395,14 +421,14 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 		); err != nil {
 			return nil, makeTokenNotIntrospectableError(fmt.Errorf("decode JWT payload: %w", err))
 		}
-		var originalClaims jwt.Claims
-		if err = json.Unmarshal(jwtPayloadBytes, &originalClaims); err != nil {
+		var regClaims jwtgo.RegisteredClaims
+		if err = json.Unmarshal(jwtPayloadBytes, &regClaims); err != nil {
 			return nil, makeTokenNotIntrospectableError(fmt.Errorf("unmarshal JWT payload: %w", err))
 		}
-		if originalClaims.Issuer == "" {
+		if regClaims.Issuer == "" {
 			return nil, makeTokenNotIntrospectableError(fmt.Errorf("no issuer found in JWT"))
 		}
-		issuer = originalClaims.Issuer
+		issuer = regClaims.Issuer
 	}
 
 	issuerURL, ok := i.getURLForIssuerWithCallback(ctx, issuer)
@@ -432,7 +458,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 	return func(ctx context.Context, token string) (IntrospectionResult, error) {
 		accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
 		if err != nil {
-			return IntrospectionResult{}, fmt.Errorf("get access token for doing introspection: %w", err)
+			return nil, fmt.Errorf("get access token for doing introspection: %w", err)
 		}
 		formEncoded := url.Values{"token": {token}}.Encode()
 		if i.scopeFilterFormURLEncoded != "" {
@@ -440,7 +466,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		}
 		req, err := http.NewRequest(http.MethodPost, introspectionEndpointURL, strings.NewReader(formEncoded))
 		if err != nil {
-			return IntrospectionResult{}, fmt.Errorf("new request: %w", err)
+			return nil, fmt.Errorf("new request: %w", err)
 		}
 		req.Header.Set("Authorization", makeBearerToken(accessToken))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -450,7 +476,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		elapsed := time.Since(startTime)
 		if err != nil {
 			i.promMetrics.ObserveHTTPClientRequest(http.MethodPost, introspectionEndpointURL, 0, elapsed, metrics.HTTPRequestErrorDo)
-			return IntrospectionResult{}, fmt.Errorf("do request: %w", err)
+			return nil, fmt.Errorf("do request: %w", err)
 		}
 		defer func() {
 			if closeBodyErr := resp.Body.Close(); closeBodyErr != nil {
@@ -463,16 +489,16 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
 			if resp.StatusCode == http.StatusUnauthorized {
-				return IntrospectionResult{}, ErrUnauthenticated
+				return nil, ErrUnauthenticated
 			}
-			return IntrospectionResult{}, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
+			return nil, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
 		}
 
-		var res IntrospectionResult
-		if err = json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		res := i.resultTemplate.Clone()
+		if err = json.NewDecoder(resp.Body).Decode(res); err != nil {
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorDecodeBody)
-			return IntrospectionResult{}, fmt.Errorf("decode response body json for POST %s: %w", introspectionEndpointURL, err)
+			return nil, fmt.Errorf("decode response body json for POST %s: %w", introspectionEndpointURL, err)
 		}
 
 		i.promMetrics.ObserveHTTPClientRequest(http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, "")
@@ -484,11 +510,11 @@ func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 	return func(ctx context.Context, token string) (IntrospectionResult, error) {
 		accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
 		if err != nil {
-			return IntrospectionResult{}, fmt.Errorf("get access token for doing introspection: %w", err)
+			return nil, fmt.Errorf("get access token for doing introspection: %w", err)
 		}
 		res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
 		if err != nil {
-			return IntrospectionResult{}, fmt.Errorf("introspect token: %w", err)
+			return nil, fmt.Errorf("introspect token: %w", err)
 		}
 		return res, nil
 	}
@@ -585,101 +611,36 @@ func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) boo
 	return true
 }
 
-// CloneClaims clones the given claims deeply.
-func cloneClaims(claims *jwt.Claims) jwt.Claims {
-	if claims == nil {
-		return jwt.Claims{}
-	}
-	newClaims := jwt.Claims{
-		RegisteredClaims: jwtgo.RegisteredClaims{
-			Issuer:  claims.Issuer,
-			Subject: claims.Subject,
-			ID:      claims.ID,
-		},
-		Version:         claims.Version,
-		UserID:          claims.UserID,
-		OriginID:        claims.OriginID,
-		ClientID:        claims.ClientID,
-		TOTPTime:        claims.TOTPTime,
-		SubType:         claims.SubType,
-		OwnerTenantUUID: claims.OwnerTenantUUID,
-	}
-	if len(claims.Scope) != 0 {
-		newClaims.Scope = make([]jwt.AccessPolicy, len(claims.Scope))
-		copy(newClaims.Scope, claims.Scope)
-	}
-	if len(claims.Audience) != 0 {
-		newClaims.Audience = make(jwtgo.ClaimStrings, len(claims.Audience))
-		copy(newClaims.Audience, claims.Audience)
-	}
-	if claims.ExpiresAt != nil {
-		newClaims.ExpiresAt = jwtgo.NewNumericDate(claims.ExpiresAt.Time)
-	}
-	if claims.NotBefore != nil {
-		newClaims.NotBefore = jwtgo.NewNumericDate(claims.NotBefore.Time)
-	}
-	if claims.IssuedAt != nil {
-		newClaims.IssuedAt = jwtgo.NewNumericDate(claims.IssuedAt.Time)
-	}
-	return newClaims
+type IntrospectionCacheItem struct {
+	IntrospectionResult IntrospectionResult
+	CreatedAt           time.Time
 }
 
-type IntrospectionClaimsCacheItem struct {
-	Claims    *jwt.Claims
-	TokenType string
-	CreatedAt time.Time
-}
-
-type IntrospectionClaimsCache interface {
-	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionClaimsCacheItem, bool)
-	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionClaimsCacheItem)
-	Purge(ctx context.Context)
-	Len(ctx context.Context) int
-}
-
-func makeIntrospectionClaimsCache(opts IntrospectorCacheOpts, promMetrics *metrics.PrometheusMetrics) IntrospectionClaimsCache {
+func makeIntrospectionClaimsCache(
+	opts IntrospectorCacheOpts, defaultMaxEntries int, promMetrics *metrics.PrometheusMetrics,
+) IntrospectionCache {
 	if !opts.Enabled {
-		return &disabledIntrospectionClaimsCache{}
+		return &disabledIntrospectionCache{}
 	}
 	if opts.MaxEntries <= 0 {
-		opts.MaxEntries = DefaultIntrospectionClaimsCacheMaxEntries
+		opts.MaxEntries = defaultMaxEntries
 	}
-	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionClaimsCacheItem](
+	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionCacheItem](
 		opts.MaxEntries, promMetrics.TokenClaimsCache) // error is always nil here
-	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionClaimsCacheItem]{cache}
+	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionCacheItem]{cache}
 }
 
-type IntrospectionNegativeCacheItem struct {
+// IntrospectionEndpointDiscoveryCacheItem is an item in the introspection endpoint discovery cache.
+type IntrospectionEndpointDiscoveryCacheItem struct {
+	// IntrospectionEndpoint is an introspection endpoint URL.
+	IntrospectionEndpoint string
+
+	// CreatedAt is a time when the item was created in the cache.
 	CreatedAt time.Time
 }
 
-type IntrospectionNegativeCache interface {
-	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionNegativeCacheItem, bool)
-	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionNegativeCacheItem)
-	Purge(ctx context.Context)
-	Len(ctx context.Context) int
-}
-
-func makeIntrospectionNegativeCache(opts IntrospectorCacheOpts, promMetrics *metrics.PrometheusMetrics) IntrospectionNegativeCache {
-	if !opts.Enabled {
-		return &disabledIntrospectionNegativeCache{}
-	}
-	if opts.TTL == 0 {
-		opts.TTL = DefaultIntrospectionNegativeCacheTTL
-	}
-	if opts.MaxEntries <= 0 {
-		opts.MaxEntries = DefaultIntrospectionNegativeCacheMaxEntries
-	}
-	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionNegativeCacheItem](
-		opts.MaxEntries, promMetrics.TokenNegativeCache) // error is always nil here
-	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionNegativeCacheItem]{cache}
-}
-
-type IntrospectionEndpointDiscoveryCacheItem struct {
-	IntrospectionEndpoint string
-	CreatedAt             time.Time
-}
-
+// IntrospectionEndpointDiscoveryCache is an interface
+// that must be implemented by used endpoint discovery cache implementations.
 type IntrospectionEndpointDiscoveryCache interface {
 	Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionEndpointDiscoveryCacheItem, bool)
 	Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionEndpointDiscoveryCacheItem)
@@ -716,6 +677,10 @@ func (a *IntrospectionLRUCache[K, V]) Add(_ context.Context, key K, val V) {
 	a.cache.Add(key, val)
 }
 
+func (a *IntrospectionLRUCache[K, V]) Remove(_ context.Context, key K) bool {
+	return a.cache.Remove(key)
+}
+
 func (a *IntrospectionLRUCache[K, V]) Purge(ctx context.Context) {
 	a.cache.Purge()
 }
@@ -724,25 +689,18 @@ func (a *IntrospectionLRUCache[K, V]) Len(ctx context.Context) int {
 	return a.cache.Len()
 }
 
-type disabledIntrospectionClaimsCache struct{}
+type disabledIntrospectionCache struct{}
 
-func (c *disabledIntrospectionClaimsCache) Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionClaimsCacheItem, bool) {
-	return IntrospectionClaimsCacheItem{}, false
+func (c *disabledIntrospectionCache) Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionCacheItem, bool) {
+	return IntrospectionCacheItem{}, false
 }
-func (c *disabledIntrospectionClaimsCache) Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionClaimsCacheItem) {
+func (c *disabledIntrospectionCache) Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionCacheItem) {
 }
-func (c *disabledIntrospectionClaimsCache) Purge(ctx context.Context)   {}
-func (c *disabledIntrospectionClaimsCache) Len(ctx context.Context) int { return 0 }
-
-type disabledIntrospectionNegativeCache struct{}
-
-func (c *disabledIntrospectionNegativeCache) Get(ctx context.Context, key [sha256.Size]byte) (IntrospectionNegativeCacheItem, bool) {
-	return IntrospectionNegativeCacheItem{}, false
+func (c *disabledIntrospectionCache) Remove(ctx context.Context, key [sha256.Size]byte) bool {
+	return false
 }
-func (c *disabledIntrospectionNegativeCache) Add(ctx context.Context, key [sha256.Size]byte, value IntrospectionNegativeCacheItem) {
-}
-func (c *disabledIntrospectionNegativeCache) Purge(ctx context.Context)   {}
-func (c *disabledIntrospectionNegativeCache) Len(ctx context.Context) int { return 0 }
+func (c *disabledIntrospectionCache) Purge(ctx context.Context)   {}
+func (c *disabledIntrospectionCache) Len(ctx context.Context) int { return 0 }
 
 type disabledIntrospectionEndpointDiscoveryCache struct{}
 

@@ -27,7 +27,7 @@ func getTokenHash(token []byte) [sha256.Size]byte {
 }
 
 func TestGetTokenHash(t *testing.T) {
-	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
+	claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
 	tokenString := []byte(idptest.MustMakeTokenStringSignedWithTestKey(claims))
 
 	th := getTokenHash(tokenString)
@@ -35,7 +35,7 @@ func TestGetTokenHash(t *testing.T) {
 	th2 := getTokenHash(tokenString)
 	require.Equal(t, th, th2, "two hashes of the same token must be equal")
 
-	claims2 := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: "other" + testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(12 * time.Minute))}}
+	claims2 := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: "other" + testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(12 * time.Minute))}}
 	tokenString2 := []byte(idptest.MustMakeTokenStringSignedWithTestKey(claims2))
 	th3 := getTokenHash(tokenString2)
 	require.NotEqual(t, th, th3, "two hashes of different tokens must be different")
@@ -48,17 +48,17 @@ func TestCachingParser_Parse(t *testing.T) {
 	issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 	defer issuerConfigServer.Close()
 
-	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
+	claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
 	parser, err := jwt.NewCachingParser(jwks.NewCachingClient())
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 
-	var parsedClaims *jwt.Claims
+	var parsedClaims jwt.Claims
 	parsedClaims, err = parser.Parse(context.Background(), tokenString)
 	require.NoError(t, err, "caching parser must not return error from Parse method")
-	require.Equal(t, claims.Scope, parsedClaims.Scope, "unexpected claims value produced by caching parser")
+	require.Equal(t, claims.Scope, parsedClaims.GetScope(), "unexpected claims value produced by caching parser")
 
 	require.Equal(t, 1, parser.ClaimsCache.Len(),
 		"one claims object must be cached after successful parse operation")
@@ -66,7 +66,7 @@ func TestCachingParser_Parse(t *testing.T) {
 	tokenKey := getTokenHash([]byte(tokenString))
 	cachedClaims, found := parser.ClaimsCache.Get(tokenKey)
 	require.True(t, found, "cached claims object must be found by token hash")
-	require.Equal(t, claims.Scope, cachedClaims.Scope, "unexpected claims value fetched from parser cache")
+	require.Equal(t, claims.Scope, cachedClaims.GetScope(), "unexpected claims value fetched from parser cache")
 
 	parser.InvalidateClaimsCache()
 	require.Equal(t, 0, parser.ClaimsCache.Len(),
@@ -82,17 +82,17 @@ func TestCachingParser_CheckExpiration(t *testing.T) {
 	issuerConfigServer := httptest.NewServer(&idptest.OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 	defer issuerConfigServer.Close()
 
-	claims := &jwt.Claims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(jwtTTL))}}
+	claims := &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: testIss, ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(jwtTTL))}}
 	tokenString := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
 	parser, err := jwt.NewCachingParser(jwks.NewCachingClient())
 	require.NoError(t, err)
 	parser.AddTrustedIssuer(testIss, issuerConfigServer.URL)
 
-	var parsedClaims *jwt.Claims
+	var parsedClaims jwt.Claims
 	parsedClaims, err = parser.Parse(context.Background(), tokenString)
 	require.NoError(t, err, "caching parser must not return error from Parse method")
-	require.Equal(t, claims.Scope, parsedClaims.Scope, "unexpected claims value produced by caching parser")
+	require.Equal(t, claims.Scope, parsedClaims.GetScope(), "unexpected claims value produced by caching parser")
 
 	require.Equal(t, 1, parser.ClaimsCache.Len(),
 		"one claims object must be cached after successful parse operation")

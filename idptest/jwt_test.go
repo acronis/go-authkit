@@ -28,7 +28,7 @@ func TestMakeTokenStringWithHeader(t *testing.T) {
 	issuerConfigServer := httptest.NewServer(&OpenIDConfigurationHandler{JWKSURL: jwksServer.URL})
 	defer issuerConfigServer.Close()
 
-	jwtClaims := &jwt.Claims{
+	jwtClaims := &jwt.DefaultClaims{
 		RegisteredClaims: jwtgo.RegisteredClaims{
 			Issuer:    testIss,
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Minute)),
@@ -44,7 +44,7 @@ func TestMakeTokenStringWithHeader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		[]jwt.AccessPolicy{{ResourceNamespace: "policy_manager", Role: "admin"}},
-		parsedClaims.Scope,
+		jwt.Scope{{ResourceNamespace: "policy_manager", Role: "admin"}},
+		parsedClaims.GetScope(),
 	)
 }

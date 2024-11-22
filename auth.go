@@ -61,6 +61,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 		ExpectedAudience:              cfg.JWT.ExpectedAudience,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		LoggerProvider:                options.loggerProvider,
+		ClaimsTemplate:                options.claimsTemplate,
 	}
 
 	if cfg.JWT.ClaimsCache.Enabled {
@@ -88,6 +89,7 @@ type jwtParserOptions struct {
 	loggerProvider                func(ctx context.Context) log.FieldLogger
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback jwt.TrustedIssNotFoundFallback
+	claimsTemplate                jwt.Claims
 }
 
 // JWTParserOption is an option for creating JWTParser.
@@ -114,6 +116,13 @@ func WithJWTParserTrustedIssuerNotFoundFallback(fallback jwt.TrustedIssNotFoundF
 	}
 }
 
+// WithJWTParserClaimsTemplate sets the claims template for JWTParser.
+func WithJWTParserClaimsTemplate(claimsTemplate jwt.Claims) JWTParserOption {
+	return func(options *jwtParserOptions) {
+		options.claimsTemplate = claimsTemplate
+	}
+}
+
 // NewTokenIntrospector creates a new TokenIntrospector with the given configuration, token provider and scope filter.
 // If cfg.Introspection.ClaimsCache.Enabled or cfg.Introspection.NegativeCache.Enabled is true,
 // then idptoken.CachingIntrospector created, otherwise - idptoken.Introspector.
@@ -122,7 +131,7 @@ func WithJWTParserTrustedIssuerNotFoundFallback(fallback jwt.TrustedIssNotFoundF
 func NewTokenIntrospector(
 	cfg *Config,
 	tokenProvider idptoken.IntrospectionTokenProvider,
-	scopeFilter []idptoken.IntrospectionScopeFilterAccessPolicy,
+	scopeFilter jwt.ScopeFilter,
 	opts ...TokenIntrospectorOption,
 ) (*idptoken.Introspector, error) {
 	options := tokenIntrospectorOptions{loggerProvider: middleware.GetLoggerFromContext}
@@ -159,6 +168,7 @@ func NewTokenIntrospector(
 		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider),
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
 		LoggerProvider:                options.loggerProvider,
+		ResultTemplate:                options.resultTemplate,
 		ScopeFilter:                   scopeFilter,
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		PrometheusLibInstanceLabel:    options.prometheusLibInstanceLabel,
@@ -189,6 +199,7 @@ type tokenIntrospectorOptions struct {
 	loggerProvider                func(ctx context.Context) log.FieldLogger
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback idptoken.TrustedIssNotFoundFallback
+	resultTemplate                idptoken.IntrospectionResult
 }
 
 // TokenIntrospectorOption is an option for creating TokenIntrospector.
@@ -218,6 +229,13 @@ func WithTokenIntrospectorTrustedIssuerNotFoundFallback(
 	}
 }
 
+// WithTokenIntrospectorResultTemplate sets the result template for TokenIntrospector.
+func WithTokenIntrospectorResultTemplate(resultTemplate idptoken.IntrospectionResult) TokenIntrospectorOption {
+	return func(options *tokenIntrospectorOptions) {
+		options.resultTemplate = resultTemplate
+	}
+}
+
 // Role is a representation of role which may be used for verifying access.
 type Role struct {
 	Namespace string
@@ -225,11 +243,12 @@ type Role struct {
 }
 
 // NewVerifyAccessByRolesInJWT creates a new function which may be used for verifying access by roles in JWT scope.
-func NewVerifyAccessByRolesInJWT(roles ...Role) func(r *http.Request, claims *jwt.Claims) bool {
-	return func(_ *http.Request, claims *jwt.Claims) bool {
+func NewVerifyAccessByRolesInJWT(roles ...Role) func(r *http.Request, claims jwt.Claims) bool {
+	return func(_ *http.Request, claims jwt.Claims) bool {
+		claimsScope := claims.GetScope()
 		for i := range roles {
-			for j := range claims.Scope {
-				if roles[i].Name == claims.Scope[j].Role && roles[i].Namespace == claims.Scope[j].ResourceNamespace {
+			for j := range claimsScope {
+				if roles[i].Name == claimsScope[j].Role && roles[i].Namespace == claimsScope[j].ResourceNamespace {
 					return true
 				}
 			}
@@ -239,8 +258,8 @@ func NewVerifyAccessByRolesInJWT(roles ...Role) func(r *http.Request, claims *jw
 }
 
 // NewVerifyAccessByRolesInJWTMaker creates a new function which may be used for verifying access by roles in JWT scope given a namespace.
-func NewVerifyAccessByRolesInJWTMaker(namespace string) func(roleNames ...string) func(r *http.Request, claims *jwt.Claims) bool {
-	return func(roleNames ...string) func(r *http.Request, claims *jwt.Claims) bool {
+func NewVerifyAccessByRolesInJWTMaker(namespace string) func(roleNames ...string) func(r *http.Request, claims jwt.Claims) bool {
+	return func(roleNames ...string) func(r *http.Request, claims jwt.Claims) bool {
 		roles := make([]Role, 0, len(roleNames))
 		for i := range roleNames {
 			roles = append(roles, Role{Namespace: namespace, Name: roleNames[i]})

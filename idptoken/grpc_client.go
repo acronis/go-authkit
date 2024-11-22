@@ -107,7 +107,7 @@ type TokenData struct {
 
 // IntrospectToken introspects the token using the IDP token service.
 func (c *GRPCClient) IntrospectToken(
-	ctx context.Context, token string, scopeFilter []IntrospectionScopeFilterAccessPolicy, accessToken string,
+	ctx context.Context, token string, scopeFilter jwt.ScopeFilter, accessToken string,
 ) (IntrospectionResult, error) {
 	req := pb.IntrospectTokenRequest{
 		Token:       token,
@@ -125,30 +125,29 @@ func (c *GRPCClient) IntrospectToken(
 		resp, innerErr = c.client.IntrospectToken(ctx, &req)
 		return innerErr
 	}); err != nil {
-		return IntrospectionResult{}, err
+		return nil, err
 	}
 
-	res := IntrospectionResult{
-		Active:    resp.GetActive(),
-		TokenType: resp.GetTokenType(),
-		Claims: jwt.Claims{
-			RegisteredClaims: jwtgo.RegisteredClaims{
-				Issuer:   resp.GetIss(),
-				Subject:  resp.GetSub(),
-				Audience: resp.GetAud(),
-				ID:       resp.GetJti(),
-			},
-			SubType:         resp.GetSubType(),
-			ClientID:        resp.GetClientId(),
-			OwnerTenantUUID: resp.GetOwnerTenantUuid(),
-			Scope:           make([]jwt.AccessPolicy, len(resp.GetScope())),
+	claims := jwt.DefaultClaims{
+		RegisteredClaims: jwtgo.RegisteredClaims{
+			Issuer:   resp.GetIss(),
+			Subject:  resp.GetSub(),
+			Audience: resp.GetAud(),
+			ID:       resp.GetJti(),
 		},
 	}
 	if resp.GetExp() != 0 {
-		res.Claims.ExpiresAt = jwtgo.NewNumericDate(time.Unix(resp.GetExp(), 0))
+		claims.ExpiresAt = jwtgo.NewNumericDate(time.Unix(resp.GetExp(), 0))
 	}
+	if resp.GetIat() != 0 {
+		claims.IssuedAt = jwtgo.NewNumericDate(time.Unix(resp.GetIat(), 0))
+	}
+	if resp.GetNbf() != 0 {
+		claims.NotBefore = jwtgo.NewNumericDate(time.Unix(resp.GetNbf(), 0))
+	}
+	claims.Scope = make([]jwt.AccessPolicy, len(resp.GetScope()))
 	for i, s := range resp.GetScope() {
-		res.Claims.Scope[i] = jwt.AccessPolicy{
+		claims.Scope[i] = jwt.AccessPolicy{
 			ResourceNamespace: s.GetResourceNamespace(),
 			Role:              s.GetRoleName(),
 			ResourceServerID:  s.GetResourceServer(),
@@ -156,10 +155,14 @@ func (c *GRPCClient) IntrospectToken(
 			TenantUUID:        s.GetTenantUuid(),
 		}
 		if s.GetTenantIntId() != 0 {
-			res.Claims.Scope[i].TenantID = strconv.FormatInt(s.GetTenantIntId(), 10)
+			claims.Scope[i].TenantID = strconv.FormatInt(s.GetTenantIntId(), 10)
 		}
 	}
-	return res, nil
+	return &DefaultIntrospectionResult{
+		Active:        resp.GetActive(),
+		TokenType:     resp.GetTokenType(),
+		DefaultClaims: claims,
+	}, nil
 }
 
 // ExchangeToken exchanges the token requesting a new token with the specified version.
