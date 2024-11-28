@@ -17,12 +17,13 @@ go get -u github.com/acronis/go-authkit
 
 ## Authenticate HTTP requests with JWT tokens
 
-`JWTAuthMiddleware()` creates a middleware that authenticates requests with JWT tokens and puts the parsed JWT claims (`jwt.Claims`) into the request context.
+`JWTAuthMiddleware()` creates a middleware that authenticates requests with JWT tokens and puts the parsed JWT claims (`jwt.Claims` interface) into the request context.
 
-`jwt.Claims` is an extension of the `RegisteredClaims` struct from the `github.com/golang-jwt/jwt/v5` package.
-It contains additional fields, one of which is `Scope` that represents a list of access policies.
-They are used for authorization in the typical Acronis service,
-and actually can be used in any other application that performs multi-tenant authorization.
+`jwt.Claims` interface extends the `jwt.Claims` from the `github.com/golang-jwt/jwt/v5` package with additional methods.
+
+Its default implementation `jwt.DefaultClaims` is an extension of the `RegisteredClaims` struct from the `github.com/golang-jwt/jwt/v5` package.
+`jwt.DefaultClaims` contains additional `Scope` field that represents a list of access policies.
+They are used for authorization in the typical Acronis service, and actually can be used in any other application that performs multi-tenant authorization.
 
 ```go
 package jwt
@@ -31,10 +32,29 @@ import (
 	jwtgo "github.com/golang-jwt/jwt/v5"
 )
 
-type Claims struct {
+// Scope is a slice of access policies.
+type Scope []AccessPolicy
+
+// Claims is an interface that extends jwt.Claims from the "github.com/golang-jwt/jwt/v5"
+// with additional methods for working with access policies.
+type Claims interface {
+	jwtgo.Claims
+
+	// GetScope returns the scope of the claims as a slice of access policies.
+	GetScope() Scope
+
+	// Clone returns a deep copy of the claims.
+	Clone() Claims
+
+	// ApplyScopeFilter filters (in-place) the scope of the claims by the specified filter.
+	ApplyScopeFilter(filter ScopeFilter)
+}
+
+// DefaultClaims is a struct that extends jwt.RegisteredClaims with a custom scope field.
+// It may be embedded into custom claims structs if additional fields are required.
+type DefaultClaims struct {
 	jwtgo.RegisteredClaims
-	Scope []AccessPolicy `json:"scope,omitempty"`
-	// ...
+	Scope Scope `json:"scope,omitempty"`
 }
 
 // AccessPolicy represents a single access policy which specifies access rights to a tenant or resource
@@ -80,7 +100,7 @@ It helps to understand where the error occurred and what service caused it. For 
 
 `JWTParser` is used to parse and validate JWT tokens.
 It can be constructed with the `NewJWTParser` right from the YAML/JSON configuration or with the specific `jwt.NewParser()`/`jwt.NewCachingParser()` functions (both of them are used in the `NewJWTParser()` under the hood depending on the configuration).
-`jwt.CachingParser` uses LRU in-memory cache for the JWT claims (`jwt.Claims`) to avoid parsing and validating the same token multiple times that can be useful when JWT tokens are large and the service gets a lot of requests from the same client.
+`jwt.CachingParser` uses LRU in-memory cache for the JWT claims to avoid parsing and validating the same token multiple times that can be useful when JWT tokens are large and the service gets a lot of requests from the same client.
 `NewJWTParser()` uses `jwks.CachingClient` for fetching and caching JWKS (JSON Web Key Set) that is used for verifying JWT tokens.
 This client performs <issuer_url>/.well-known/openid-configuration request to get the JWKS URL ("jwks_uri" field) and fetches JWKS from there.
 Issuer should be presented in the trusted list, otherwise the middleware will return HTTP response with 401 status code and log a corresponding error message.
