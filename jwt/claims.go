@@ -16,6 +16,9 @@ type Scope []AccessPolicy
 type Claims interface {
 	jwtgo.Claims
 
+	// GetID returns the JTI field of the claims.
+	GetID() string
+
 	// GetScope returns the scope of the claims as a slice of access policies.
 	GetScope() Scope
 
@@ -31,6 +34,11 @@ type Claims interface {
 type DefaultClaims struct {
 	jwtgo.RegisteredClaims
 	Scope Scope `json:"scope,omitempty"`
+}
+
+// GetID returns the JTI field of the DefaultClaims.
+func (c *DefaultClaims) GetID() string {
+	return c.ID
 }
 
 // GetScope returns the scope of the DefaultClaims as a slice of access policies.
