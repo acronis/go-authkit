@@ -18,6 +18,7 @@ import (
 
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/metrics"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -70,12 +71,14 @@ type jwtAuthHandler struct {
 	verifyAccess      func(r *http.Request, claims jwt.Claims) bool
 	tokenIntrospector TokenIntrospector
 	loggerProvider    func(ctx context.Context) log.FieldLogger
+	promMetrics       *metrics.PrometheusMetrics
 }
 
 type jwtAuthMiddlewareOpts struct {
-	verifyAccess      func(r *http.Request, claims jwt.Claims) bool
-	tokenIntrospector TokenIntrospector
-	loggerProvider    func(ctx context.Context) log.FieldLogger
+	verifyAccess               func(r *http.Request, claims jwt.Claims) bool
+	tokenIntrospector          TokenIntrospector
+	loggerProvider             func(ctx context.Context) log.FieldLogger
+	prometheusLibInstanceLabel string
 }
 
 // JWTAuthMiddlewareOption is an option for JWTAuthMiddleware.
@@ -102,6 +105,13 @@ func WithJWTAuthMiddlewareLoggerProvider(loggerProvider func(ctx context.Context
 	}
 }
 
+// WithJWTAuthMiddlewarePrometheusLibInstanceLabel is an option to set a label for Prometheus metrics that are used by JWTAuthMiddleware.
+func WithJWTAuthMiddlewarePrometheusLibInstanceLabel(label string) JWTAuthMiddlewareOption {
+	return func(options *jwtAuthMiddlewareOpts) {
+		options.prometheusLibInstanceLabel = label
+	}
+}
+
 // JWTAuthMiddleware is a middleware that does authentication
 // by Access Token from the "Authorization" HTTP header of incoming request.
 // errorDomain is used for error responses. It is usually the name of the service that uses the middleware,
@@ -123,6 +133,7 @@ func JWTAuthMiddleware(errorDomain string, jwtParser JWTParser, opts ...JWTAuthM
 			verifyAccess:      options.verifyAccess,
 			tokenIntrospector: options.tokenIntrospector,
 			loggerProvider:    options.loggerProvider,
+			promMetrics:       metrics.GetPrometheusMetrics(options.prometheusLibInstanceLabel, metrics.SourceHTTPMiddleware),
 		}
 	}
 }
@@ -146,14 +157,17 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				h.logger(reqCtx).AtLevel(log.LevelDebug, func(logFunc log.LogFunc) {
 					logFunc("token's introspection is not needed")
 				})
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotNeeded)
 			case errors.Is(err, idptoken.ErrTokenNotIntrospectable):
 				// Token is not introspectable by some reason.
 				// In this case, we will parse it as JWT and use it for authZ.
 				h.logger(reqCtx).Warn("token is not introspectable, it will be used for authentication and authorization as is",
 					log.Error(err))
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotIntrospectable)
 			default:
 				logger := h.logger(reqCtx)
 				logger.Error("token's introspection failed", log.Error(err))
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusError)
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
 				return
@@ -161,6 +175,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		} else {
 			if !introspectionResult.IsActive() {
 				h.logger(reqCtx).Warn("token was successfully introspected, but it is not active")
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotActive)
 				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, h.logger(reqCtx))
 				return
@@ -169,6 +184,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			h.logger(reqCtx).AtLevel(log.LevelDebug, func(logFunc log.LogFunc) {
 				logFunc("token was successfully introspected")
 			})
+			h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusActive)
 		}
 	}
 

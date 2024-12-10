@@ -57,7 +57,7 @@ func NewClient() *Client {
 
 // NewClientWithOpts returns a new Client with options.
 func NewClientWithOpts(opts ClientOpts) *Client {
-	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "jwks_client")
+	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceJWKSClient)
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider)
 	}

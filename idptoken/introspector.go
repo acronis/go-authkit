@@ -32,8 +32,6 @@ import (
 
 const minAccessTokenProviderInvalidationInterval = time.Minute
 
-const tokenIntrospectorPromSource = "token_introspector"
-
 const (
 	// DefaultIntrospectionClaimsCacheMaxEntries is a default maximum number of entries in the claims cache.
 	// Claims cache is used for storing introspected active tokens.
@@ -250,7 +248,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 	}
 	scopeFilterFormURLEncoded := values.Encode()
 
-	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, tokenIntrospectorPromSource)
+	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceTokenIntrospector)
 
 	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache, DefaultIntrospectionClaimsCacheMaxEntries, promMetrics)
 	if opts.ClaimsCache.TTL == 0 {

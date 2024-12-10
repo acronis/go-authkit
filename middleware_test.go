@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/idptoken"
+	"github.com/acronis/go-authkit/internal/metrics"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -122,12 +123,18 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
 		resp := httptest.NewRecorder()
 
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusError), 0)
+
 		JWTAuthMiddleware(errDomain, parser, WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).ServeHTTP(resp, req)
 
 		testutil.RequireErrorInRecorder(t, resp, http.StatusUnauthorized, errDomain, ErrCodeAuthenticationFailed)
 		require.Equal(t, 1, introspector.introspectCalled)
 		require.Equal(t, 0, parser.parseCalled)
 		require.Equal(t, 0, next.called)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusError), 1)
 	})
 
 	t.Run("introspection is not needed", func(t *testing.T) {
@@ -139,6 +146,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
 		resp := httptest.NewRecorder()
 
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotNeeded), 0)
+
 		JWTAuthMiddleware(errDomain, parser, WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).ServeHTTP(resp, req)
 
 		require.Equal(t, http.StatusOK, resp.Code)
@@ -148,6 +158,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		nextIssuer, err := next.jwtClaims.GetIssuer()
 		require.NoError(t, err)
 		require.Equal(t, issuer, nextIssuer)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotNeeded), 1)
 	})
 
 	t.Run("ok, token is not introspectable", func(t *testing.T) {
@@ -159,6 +172,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
 		resp := httptest.NewRecorder()
 
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotIntrospectable), 0)
+
 		JWTAuthMiddleware(errDomain, parser, WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).ServeHTTP(resp, req)
 
 		require.Equal(t, http.StatusOK, resp.Code)
@@ -169,10 +185,12 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		nextIssuer, err := next.jwtClaims.GetIssuer()
 		require.NoError(t, err)
 		require.Equal(t, issuer, nextIssuer)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotIntrospectable), 1)
 	})
 
 	t.Run("authentication failed, token is introspected but inactive", func(t *testing.T) {
-		const issuer = "my-idp.com"
 		parser := &mockJWTParser{}
 		introspector := &mockTokenIntrospector{resultToReturn: &idptoken.DefaultIntrospectionResult{Active: false}}
 		next := &mockJWTAuthMiddlewareNextHandler{}
@@ -180,12 +198,18 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
 		resp := httptest.NewRecorder()
 
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotActive), 0)
+
 		JWTAuthMiddleware(errDomain, parser, WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).ServeHTTP(resp, req)
 
 		testutil.RequireErrorInRecorder(t, resp, http.StatusUnauthorized, errDomain, ErrCodeAuthenticationFailed)
 		require.Equal(t, 1, introspector.introspectCalled)
 		require.Equal(t, 0, parser.parseCalled)
 		require.Equal(t, 0, next.called)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusNotActive), 1)
 	})
 
 	t.Run("ok, token is introspected and active", func(t *testing.T) {
@@ -198,6 +222,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		req.Header.Set(HeaderAuthorization, "Bearer a.b.c")
 		resp := httptest.NewRecorder()
 
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusActive), 0)
+
 		JWTAuthMiddleware(errDomain, parser, WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).ServeHTTP(resp, req)
 
 		require.Equal(t, http.StatusOK, resp.Code)
@@ -208,6 +235,9 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		nextIssuer, err := next.jwtClaims.GetIssuer()
 		require.NoError(t, err)
 		require.Equal(t, issuer, nextIssuer)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusActive), 1)
 	})
 }
 
