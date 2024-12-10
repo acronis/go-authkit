@@ -39,12 +39,31 @@ const (
 
 	GRPCClientRequestLabelMethod = "grpc_method"
 	GRPCClientRequestLabelCode   = "grpc_code"
+
+	TokenIntrospectionLabelStatus = "status"
 )
 
 const (
 	HTTPRequestErrorDo                   = "do_request_error"
 	HTTPRequestErrorDecodeBody           = "decode_body_error"
 	HTTPRequestErrorUnexpectedStatusCode = "unexpected_status_code"
+
+	TokenIntrospectionStatusActive            = "active"
+	TokenIntrospectionStatusNotActive         = "not_active"
+	TokenIntrospectionStatusNotNeeded         = "not_needed"
+	TokenIntrospectionStatusNotIntrospectable = "not_introspectable"
+	TokenIntrospectionStatusError             = "error"
+)
+
+type Source string
+
+const (
+	SourceJWKSClient        Source = "jwks_client"
+	SourceJWTParser         Source = "jwt_parser"
+	SourceGRPCClient        Source = "grpc_client"
+	SourceTokenIntrospector Source = "token_introspector"
+	SourceTokenProvider     Source = "token_provider"
+	SourceHTTPMiddleware    Source = "http_middleware"
 )
 
 var requestDurationBuckets = []float64{0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
@@ -58,12 +77,13 @@ var (
 type PrometheusMetrics struct {
 	HTTPClientRequestDuration *prometheus.HistogramVec
 	GRPCClientRequestDuration *prometheus.HistogramVec
+	TokenIntrospectionsTotal  *prometheus.CounterVec
 	TokenClaimsCache          *lrucache.PrometheusMetrics
 	TokenNegativeCache        *lrucache.PrometheusMetrics
 	EndpointDiscoveryCache    *lrucache.PrometheusMetrics
 }
 
-func GetPrometheusMetrics(instance string, source string) *PrometheusMetrics {
+func GetPrometheusMetrics(instance string, source Source) *PrometheusMetrics {
 	prometheusMetricsOnce.Do(func() {
 		prometheusMetrics = newPrometheusMetrics()
 		prometheusMetrics.MustRegister()
@@ -73,7 +93,7 @@ func GetPrometheusMetrics(instance string, source string) *PrometheusMetrics {
 	}
 	return prometheusMetrics.MustCurryWith(map[string]string{
 		PrometheusLibInstanceLabel: instance,
-		PrometheusLibSourceLabel:   source,
+		PrometheusLibSourceLabel:   string(source),
 	})
 }
 
@@ -95,6 +115,7 @@ func newPrometheusMetrics() *PrometheusMetrics {
 		makeLabelNames(HTTPClientRequestLabelMethod, HTTPClientRequestLabelURL,
 			HTTPClientRequestLabelStatusCode, HTTPClientRequestLabelError),
 	)
+
 	grpcClientReqDuration := prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   PrometheusNamespace,
@@ -104,6 +125,16 @@ func newPrometheusMetrics() *PrometheusMetrics {
 			ConstLabels: PrometheusLabels(),
 		},
 		makeLabelNames(GRPCClientRequestLabelMethod, GRPCClientRequestLabelCode),
+	)
+
+	tokenIntrospectionsTotal := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   PrometheusNamespace,
+			Name:        "token_introspections_total",
+			Help:        "Total number of tokens' introspections",
+			ConstLabels: PrometheusLabels(),
+		},
+		makeLabelNames(TokenIntrospectionLabelStatus),
 	)
 
 	tokenClaimsCache := lrucache.NewPrometheusMetricsWithOpts(lrucache.PrometheusMetricsOpts{
@@ -127,6 +158,7 @@ func newPrometheusMetrics() *PrometheusMetrics {
 	return &PrometheusMetrics{
 		HTTPClientRequestDuration: httpClientReqDuration,
 		GRPCClientRequestDuration: grpcClientReqDuration,
+		TokenIntrospectionsTotal:  tokenIntrospectionsTotal,
 		TokenClaimsCache:          tokenClaimsCache,
 		TokenNegativeCache:        tokenNegativeCache,
 		EndpointDiscoveryCache:    endpointDiscoveryCache,
@@ -138,6 +170,7 @@ func (pm *PrometheusMetrics) MustCurryWith(labels prometheus.Labels) *Prometheus
 	return &PrometheusMetrics{
 		HTTPClientRequestDuration: pm.HTTPClientRequestDuration.MustCurryWith(labels).(*prometheus.HistogramVec),
 		GRPCClientRequestDuration: pm.GRPCClientRequestDuration.MustCurryWith(labels).(*prometheus.HistogramVec),
+		TokenIntrospectionsTotal:  pm.TokenIntrospectionsTotal.MustCurryWith(labels),
 		TokenClaimsCache:          pm.TokenClaimsCache.MustCurryWith(labels),
 		TokenNegativeCache:        pm.TokenNegativeCache.MustCurryWith(labels),
 		EndpointDiscoveryCache:    pm.EndpointDiscoveryCache.MustCurryWith(labels),
@@ -182,4 +215,8 @@ func (pm *PrometheusMetrics) ObserveGRPCClientRequest(
 		GRPCClientRequestLabelMethod: method,
 		GRPCClientRequestLabelCode:   code.String(),
 	}).Observe(elapsed.Seconds())
+}
+
+func (pm *PrometheusMetrics) IncTokenIntrospectionsTotal(status string) {
+	pm.TokenIntrospectionsTotal.With(prometheus.Labels{TokenIntrospectionLabelStatus: status}).Inc()
 }

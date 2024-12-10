@@ -84,7 +84,7 @@ func NewGRPCClientWithOpts(
 		client:      pb.NewIDPTokenServiceClient(conn),
 		clientConn:  conn,
 		reqTimeout:  opts.RequestTimeout,
-		promMetrics: metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "grpc_client"),
+		promMetrics: metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceGRPCClient),
 	}, nil
 }
 

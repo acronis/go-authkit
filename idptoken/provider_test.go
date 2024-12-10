@@ -254,7 +254,7 @@ func TestProviderWithCache(t *testing.T) {
 			metrics.HTTPClientRequestLabelStatusCode: "500",
 			metrics.HTTPClientRequestLabelError:      "unexpected_status_code",
 		}
-		promMetrics := metrics.GetPrometheusMetrics("", "token_provider")
+		promMetrics := metrics.GetPrometheusMetrics("", metrics.SourceTokenProvider)
 		hist := promMetrics.HTTPClientRequestDuration.With(labels).(prometheus.Histogram)
 		testutil.AssertSamplesCountInHistogram(t, hist, 1)
 	})
@@ -287,7 +287,7 @@ func TestProviderWithCache(t *testing.T) {
 			metrics.HTTPClientRequestLabelStatusCode: "200",
 			metrics.HTTPClientRequestLabelError:      "",
 		}
-		promMetrics := metrics.GetPrometheusMetrics("", "token_provider")
+		promMetrics := metrics.GetPrometheusMetrics("", metrics.SourceTokenProvider)
 		hist := promMetrics.HTTPClientRequestDuration.With(labels).(prometheus.Histogram)
 		testutil.AssertSamplesCountInHistogram(t, hist, 1)
 	})

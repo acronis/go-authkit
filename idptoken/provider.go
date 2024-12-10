@@ -171,7 +171,7 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 		minRefreshPeriod: opts.MinRefreshPeriod,
 		logger:           idputil.PrepareLogger(opts.Logger),
 		tokenIssuers:     make(map[string]*oauth2Issuer),
-		promMetrics:      metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, "token_provider"),
+		promMetrics:      metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceTokenProvider),
 		customHeaders:    opts.CustomHeaders,
 		cache:            opts.CustomCacheInstance,
 		httpClient:       opts.HTTPClient,

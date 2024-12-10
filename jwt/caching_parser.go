@@ -48,7 +48,7 @@ func NewCachingParser(keysProvider KeysProvider) (*CachingParser, error) {
 func NewCachingParserWithOpts(
 	keysProvider KeysProvider, opts CachingParserOpts,
 ) (*CachingParser, error) {
-	promMetrics := metrics.GetPrometheusMetrics(opts.CachePrometheusInstanceLabel, "jwt_parser")
+	promMetrics := metrics.GetPrometheusMetrics(opts.CachePrometheusInstanceLabel, metrics.SourceJWTParser)
 	if opts.CacheMaxEntries == 0 {
 		opts.CacheMaxEntries = DefaultClaimsCacheMaxEntries
 	}
