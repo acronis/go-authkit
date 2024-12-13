@@ -32,12 +32,31 @@ type CachingKeysProvider interface {
 
 // ParserOpts additional options for parser.
 type ParserOpts struct {
-	SkipClaimsValidation          bool
-	RequireAudience               bool
-	ExpectedAudience              []string
+	// SkipClaimsValidation is a flag that indicates whether claims validation (e.g. checking expiration time) should be skipped.
+	// It doesn't affect signature verification.
+	SkipClaimsValidation bool
+
+	// RequireAudience is a flag that indicates whether audience should be required.
+	RequireAudience bool
+
+	// ExpectedAudience is a list of expected audience patterns.
+	// If it's set, then only tokens with audience that matches at least one of the patterns will be accepted.
+	ExpectedAudience []string
+
+	// TrustedIssuerNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
 	TrustedIssuerNotFoundFallback TrustedIssNotFoundFallback
-	LoggerProvider                func(ctx context.Context) log.FieldLogger
-	ClaimsTemplate                Claims
+
+	// LoggerProvider is a function that provides a logger for the Parser.
+	LoggerProvider func(ctx context.Context) log.FieldLogger
+
+	// ClaimsTemplate is a template for claims object that will be used for unmarshalling JWT.
+	// By default, DefaultClaims is used.
+	ClaimsTemplate Claims
+
+	// ScopeFilter is a filter that will be applied to access policies in JWT scope after parsing.
+	// If it's set, then only access policies in scope that match at least one of the filtering policies will be returned.
+	// It's useful when the CachingParser is used, and we want to store only some of the access policies in the cache to reduce memory usage.
+	ScopeFilter ScopeFilter
 }
 
 type audienceMatcher func(aud string) bool
@@ -58,6 +77,8 @@ type Parser struct {
 	trustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 
 	loggerProvider func(ctx context.Context) log.FieldLogger
+
+	scopeFilter ScopeFilter
 }
 
 // NewParser creates new JWT parser with specified keys provider.
@@ -88,6 +109,7 @@ func NewParserWithOpts(keysProvider KeysProvider, opts ParserOpts) *Parser {
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
 		loggerProvider:                opts.LoggerProvider,
 		claimsTemplate:                claimsTemplate,
+		scopeFilter:                   opts.ScopeFilter,
 	}
 }
 
@@ -147,6 +169,8 @@ func (p *Parser) Parse(ctx context.Context, token string) (Claims, error) {
 			return nil, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
 		}
 	}
+
+	claims.ApplyScopeFilter(p.scopeFilter)
 
 	return claims, nil
 }

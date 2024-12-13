@@ -49,7 +49,12 @@ func TestNewJWTParser(t *gotesting.T) {
 			Issuer:    idpSrv.URL(),
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(10 * time.Second)),
 		},
-		Scope: []jwt.AccessPolicy{{ResourceNamespace: "my-service", Role: "ro_admin"}},
+		Scope: []jwt.AccessPolicy{
+			{ResourceNamespace: "my-service", Role: "ro_admin"},
+			{ResourceNamespace: "other-service", Role: "ro_admin"},
+			{ResourceNamespace: "my-service", Role: "admin"},
+			{ResourceNamespace: "other-service", Role: "admin"},
+		},
 	}
 	token := idptest.MustMakeTokenStringSignedWithTestKey(claims)
 
@@ -66,6 +71,7 @@ func TestNewJWTParser(t *gotesting.T) {
 		name           string
 		token          string
 		cfg            *Config
+		opts           []JWTParserOption
 		expectedClaims jwt.Claims
 		checkFn        func(t *gotesting.T, jwtParser JWTParser)
 	}{
@@ -109,10 +115,44 @@ func TestNewJWTParser(t *gotesting.T) {
 				require.Equal(t, 1, cachingParser.ClaimsCache.Len())
 			},
 		},
+		{
+			name:  "new jwt parser with scope filter",
+			cfg:   &Config{JWT: JWTConfig{TrustedIssuerURLs: []string{idpSrv.URL()}}},
+			token: token,
+			expectedClaims: &jwt.DefaultClaims{
+				RegisteredClaims: claims.RegisteredClaims,
+				Scope: []jwt.AccessPolicy{
+					{ResourceNamespace: "my-service", Role: "ro_admin"},
+					{ResourceNamespace: "my-service", Role: "admin"},
+				},
+			},
+			opts: []JWTParserOption{WithJWTParserScopeFilter(jwt.ScopeFilter{{ResourceNamespace: "my-service"}})},
+			checkFn: func(t *gotesting.T, jwtParser JWTParser) {
+				require.IsType(t, &jwt.Parser{}, jwtParser)
+			},
+		},
+		{
+			name:  "new caching jwt parser with scope filter",
+			cfg:   &Config{JWT: JWTConfig{TrustedIssuerURLs: []string{idpSrv.URL()}, ClaimsCache: ClaimsCacheConfig{Enabled: true}}},
+			token: token,
+			expectedClaims: &jwt.DefaultClaims{
+				RegisteredClaims: claims.RegisteredClaims,
+				Scope: []jwt.AccessPolicy{
+					{ResourceNamespace: "other-service", Role: "ro_admin"},
+					{ResourceNamespace: "other-service", Role: "admin"},
+				},
+			},
+			opts: []JWTParserOption{WithJWTParserScopeFilter(jwt.ScopeFilter{{ResourceNamespace: "other-service"}})},
+			checkFn: func(t *gotesting.T, jwtParser JWTParser) {
+				require.IsType(t, &jwt.CachingParser{}, jwtParser)
+				cachingParser := jwtParser.(*jwt.CachingParser)
+				require.Equal(t, 1, cachingParser.ClaimsCache.Len())
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *gotesting.T) {
-			jwtParser, err := NewJWTParser(tt.cfg)
+			jwtParser, err := NewJWTParser(tt.cfg, tt.opts...)
 			require.NoError(t, err)
 
 			parsedClaims, err := jwtParser.Parse(context.Background(), tt.token)
