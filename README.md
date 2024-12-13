@@ -1,5 +1,7 @@
 # Toolkit for authentication and authorization in Go services
 
+[![GoDoc Widget]][GoDoc]
+
 ## Installation
 
 ```
@@ -39,6 +41,9 @@ type Scope []AccessPolicy
 // with additional methods for working with access policies.
 type Claims interface {
 	jwtgo.Claims
+
+	// GetID returns the JTI field of the claims.
+	GetID() string
 
 	// GetScope returns the scope of the claims as a slice of access policies.
 	GetScope() Scope
@@ -185,3 +190,6 @@ func main() {
 Copyright © 2024 Acronis International GmbH.
 
 Licensed under [MIT License](./LICENSE).
+
+[GoDoc]: https://pkg.go.dev/github.com/acronis/go-authkit
+[GoDoc Widget]: https://godoc.org/github.com/acronis/go-authkit?status.svg
