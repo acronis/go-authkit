@@ -62,6 +62,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 		TrustedIssuerNotFoundFallback: options.trustedIssuerNotFoundFallback,
 		LoggerProvider:                options.loggerProvider,
 		ClaimsTemplate:                options.claimsTemplate,
+		ScopeFilter:                   options.scopeFilter,
 	}
 
 	if cfg.JWT.ClaimsCache.Enabled {
@@ -90,6 +91,7 @@ type jwtParserOptions struct {
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback jwt.TrustedIssNotFoundFallback
 	claimsTemplate                jwt.Claims
+	scopeFilter                   jwt.ScopeFilter
 }
 
 // JWTParserOption is an option for creating JWTParser.
@@ -120,6 +122,16 @@ func WithJWTParserTrustedIssuerNotFoundFallback(fallback jwt.TrustedIssNotFoundF
 func WithJWTParserClaimsTemplate(claimsTemplate jwt.Claims) JWTParserOption {
 	return func(options *jwtParserOptions) {
 		options.claimsTemplate = claimsTemplate
+	}
+}
+
+// WithJWTParserScopeFilter sets the scope filter for JWTParser.
+// If it's used, then only access policies in scope that match at least one of the filtering policies will be returned.
+// It's useful when the claims cache is used (cfg.JWT.ClaimsCache.Enabled is true),
+// and we want to store only some of the access policies in the cache to reduce memory usage.
+func WithJWTParserScopeFilter(scopeFilter jwt.ScopeFilter) JWTParserOption {
+	return func(options *jwtParserOptions) {
+		options.scopeFilter = scopeFilter
 	}
 }
 
