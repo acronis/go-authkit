@@ -61,6 +61,10 @@ var ErrTokenNotIntrospectable = errors.New("token is not introspectable")
 // (i.e., it already contains all necessary information).
 var ErrTokenIntrospectionNotNeeded = errors.New("token introspection is not needed")
 
+// ErrTokenIntrospectionInvalidClaims is returned when introspection response claims are invalid.
+// (e.g., audience is not valid)
+var ErrTokenIntrospectionInvalidClaims = errors.New("introspection response claims are invalid")
+
 // ErrUnauthenticated is returned when a request is unauthenticated.
 var ErrUnauthenticated = errors.New("request is unauthenticated")
 
@@ -142,6 +146,15 @@ type IntrospectorOpts struct {
 	// that will be used instead of DefaultIntrospectionResult for unmarshalling introspection response.
 	// It must implement IntrospectionResult interface.
 	ResultTemplate IntrospectionResult
+
+	// RequireAudience specifies whether audience should be required.
+	// If true, "aud" field must be present in the introspection response.
+	RequireAudience bool
+
+	// ExpectedAudience is a list of expected audience values.
+	// It's allowed to use glob patterns (*.my-service.com) for audience matching.
+	// If it's not empty, "aud" field in the introspection response must match at least one of the patterns.
+	ExpectedAudience []string
 }
 
 // IntrospectorCacheOpts is a configuration of how cache will be used.
@@ -193,6 +206,9 @@ type Introspector struct {
 	claimsCacheTTL            time.Duration
 	negativeCacheTTL          time.Duration
 	endpointDiscoveryCacheTTL time.Duration
+
+	claimsValidator   *jwtgo.Validator
+	audienceValidator *jwt.AudienceValidator
 }
 
 // DefaultIntrospectionResult is a default implementation of IntrospectionResult.
@@ -291,6 +307,8 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		negativeCacheTTL:              opts.NegativeCache.TTL,
 		EndpointDiscoveryCache:        endpointDiscoveryCache,
 		endpointDiscoveryCacheTTL:     opts.EndpointDiscoveryCache.TTL,
+		claimsValidator:               jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
+		audienceValidator:             jwt.NewAudienceValidator(opts.RequireAudience, opts.ExpectedAudience),
 	}, nil
 }
 
@@ -300,15 +318,11 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		unsafe.Slice(unsafe.StringData(token), len(token))) // nolint:gosec // prevent redundant slice copying
 
 	if cachedItem, ok := i.ClaimsCache.Get(ctx, cacheKey); ok {
-		now := time.Now()
-		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(now) {
-			cachedClaimsExpiresAt, err := cachedItem.IntrospectionResult.GetClaims().GetExpirationTime()
-			if err != nil {
-				return nil, fmt.Errorf("get expiration time from cached claims: %w", err)
+		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(time.Now()) {
+			if err := i.validateClaims(cachedItem.IntrospectionResult.GetClaims()); err != nil {
+				return nil, err
 			}
-			if cachedClaimsExpiresAt == nil || cachedClaimsExpiresAt.Time.After(now) {
-				return cachedItem.IntrospectionResult.Clone(), nil
-			}
+			return cachedItem.IntrospectionResult.Clone(), nil
 		}
 	} else if cachedItem, ok = i.NegativeCache.Get(ctx, cacheKey); ok {
 		if cachedItem.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
@@ -320,15 +334,15 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 	if err != nil {
 		return nil, err
 	}
-	if introspectionResult.IsActive() {
-		introspectionResult.GetClaims().ApplyScopeFilter(i.scopeFilter)
-		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{
-			IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
-	} else {
-		i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{
-			IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
+	if !introspectionResult.IsActive() {
+		i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
+		return introspectionResult, nil
 	}
-
+	introspectionResult.GetClaims().ApplyScopeFilter(i.scopeFilter)
+	i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
+	if err = i.validateClaims(introspectionResult.GetClaims()); err != nil {
+		return nil, err
+	}
 	return introspectionResult, nil
 }
 
@@ -556,6 +570,16 @@ func (i *Introspector) getURLForIssuerWithCallback(ctx context.Context, issuer s
 		return "", false
 	}
 	return i.trustedIssuerNotFoundFallback(ctx, i, issuer)
+}
+
+func (i *Introspector) validateClaims(claims jwt.Claims) error {
+	if err := i.claimsValidator.Validate(claims); err != nil {
+		return fmt.Errorf("%w: %w", ErrTokenIntrospectionInvalidClaims, err)
+	}
+	if err := i.audienceValidator.Validate(claims); err != nil {
+		return fmt.Errorf("%w: %w", ErrTokenIntrospectionInvalidClaims, err)
+	}
+	return nil
 }
 
 func makeTokenNotIntrospectableError(inner error) error {
