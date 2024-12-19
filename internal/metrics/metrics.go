@@ -52,6 +52,7 @@ const (
 	TokenIntrospectionStatusNotActive         = "not_active"
 	TokenIntrospectionStatusNotNeeded         = "not_needed"
 	TokenIntrospectionStatusNotIntrospectable = "not_introspectable"
+	TokenIntrospectionStatusInvalidClaims     = "invalid_claims"
 	TokenIntrospectionStatusError             = "error"
 )
 
