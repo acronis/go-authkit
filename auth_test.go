@@ -214,10 +214,19 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 		Role:              "admin",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
+	opaqueTokenRegClaims := jwtgo.RegisteredClaims{
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
 	httpServerIntrospector.SetResultForToken(opaqueToken, &idptoken.DefaultIntrospectionResult{
-		Active: true, TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope}})
+		Active:        true,
+		TokenType:     idputil.TokenTypeBearer,
+		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueTokenRegClaims, Scope: opaqueTokenScope},
+	})
 	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
-		Active: true, TokenType: idputil.TokenTypeBearer, Scope: []*pb.AccessTokenScope{
+		Active:    true,
+		TokenType: idputil.TokenTypeBearer,
+		Exp:       opaqueTokenRegClaims.ExpiresAt.Unix(),
+		Scope: []*pb.AccessTokenScope{
 			{
 				TenantUuid:        opaqueTokenScope[0].TenantUUID,
 				ResourceNamespace: opaqueTokenScope[0].ResourceNamespace,
@@ -308,7 +317,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			expectedResult: &idptoken.DefaultIntrospectionResult{
 				Active:        true,
 				TokenType:     idputil.TokenTypeBearer,
-				DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope},
+				DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueTokenRegClaims, Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Equal(t, 1, introspector.ClaimsCache.Len(context.Background()))
@@ -334,7 +343,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 			expectedResult: &idptoken.DefaultIntrospectionResult{
 				Active:        true,
 				TokenType:     idputil.TokenTypeBearer,
-				DefaultClaims: jwt.DefaultClaims{Scope: opaqueTokenScope},
+				DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueTokenRegClaims, Scope: opaqueTokenScope},
 			},
 			checkCacheFn: func(t *gotesting.T, introspector *idptoken.Introspector) {
 				require.Empty(t, introspector.ClaimsCache.Len(context.Background()))
