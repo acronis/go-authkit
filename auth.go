@@ -194,6 +194,8 @@ func NewTokenIntrospector(
 			MaxEntries: cfg.Introspection.NegativeCache.MaxEntries,
 			TTL:        cfg.Introspection.NegativeCache.TTL,
 		},
+		RequireAudience:  cfg.JWT.RequireAudience,
+		ExpectedAudience: cfg.JWT.ExpectedAudience,
 	}
 	introspector, err := idptoken.NewIntrospectorWithOpts(tokenProvider, introspectorOpts)
 	if err != nil {

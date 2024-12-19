@@ -158,26 +158,34 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 					logFunc("token's introspection is not needed")
 				})
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotNeeded)
+
 			case errors.Is(err, idptoken.ErrTokenNotIntrospectable):
 				// Token is not introspectable by some reason.
 				// In this case, we will parse it as JWT and use it for authZ.
 				h.logger(reqCtx).Warn("token is not introspectable, it will be used for authentication and authorization as is",
 					log.Error(err))
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotIntrospectable)
+
+			case errors.Is(err, idptoken.ErrTokenIntrospectionInvalidClaims):
+				logger := h.logger(reqCtx)
+				logger.Error("token's introspection failed because of invalid claims", log.Error(err))
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusInvalidClaims)
+				h.respondAuthNFailedError(rw, logger)
+				return
+
 			default:
 				logger := h.logger(reqCtx)
 				logger.Error("token's introspection failed", log.Error(err))
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusError)
-				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
-				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
+				h.respondAuthNFailedError(rw, logger)
 				return
 			}
 		} else {
 			if !introspectionResult.IsActive() {
-				h.logger(reqCtx).Warn("token was successfully introspected, but it is not active")
+				logger := h.logger(reqCtx)
+				logger.Warn("token was successfully introspected, but it is not active")
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotActive)
-				apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
-				restapi.RespondError(rw, http.StatusUnauthorized, apiErr, h.logger(reqCtx))
+				h.respondAuthNFailedError(rw, logger)
 				return
 			}
 			jwtClaims = introspectionResult.GetClaims()
@@ -193,8 +201,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		if jwtClaims, err = h.jwtParser.Parse(reqCtx, bearerToken); err != nil {
 			logger := h.logger(reqCtx)
 			logger.Error("authentication failed", log.Error(err))
-			apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
-			restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
+			h.respondAuthNFailedError(rw, logger)
 			return
 		}
 	}
@@ -214,6 +221,11 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 func (h *jwtAuthHandler) logger(ctx context.Context) log.FieldLogger {
 	return idputil.GetLoggerFromProvider(ctx, h.loggerProvider)
+}
+
+func (h *jwtAuthHandler) respondAuthNFailedError(rw http.ResponseWriter, logger log.FieldLogger) {
+	apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
+	restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
 }
 
 // GetBearerTokenFromRequest extracts jwt token from request headers.

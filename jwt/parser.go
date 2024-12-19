@@ -13,7 +13,6 @@ import (
 
 	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
-	"github.com/vasayxtx/go-glob"
 
 	"github.com/acronis/go-authkit/internal/idputil"
 )
@@ -32,25 +31,31 @@ type CachingKeysProvider interface {
 
 // ParserOpts additional options for parser.
 type ParserOpts struct {
-	// SkipClaimsValidation is a flag that indicates whether claims validation (e.g. checking expiration time) should be skipped.
+	// SkipClaimsValidation allows skipping claims validation (e.g., checking expiration time).
+	// Use it with caution, and only if you know what you are doing.
+	// For example, if you want to validate claims by yourself.
 	// It doesn't affect signature verification.
 	SkipClaimsValidation bool
 
-	// RequireAudience is a flag that indicates whether audience should be required.
+	// RequireAudience specifies whether audience should be required. If true, "aud" claim must be present in the token.
 	RequireAudience bool
 
-	// ExpectedAudience is a list of expected audience patterns.
-	// If it's set, then only tokens with audience that matches at least one of the patterns will be accepted.
+	// ExpectedAudience is a list of expected audience values.
+	// It's allowed to use glob patterns (*.my-service.com) for audience matching.
+	// If it's not empty, "aud" JWT claim must match at least one of the patterns.
 	ExpectedAudience []string
 
 	// TrustedIssuerNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
+	// For example, it could be analyzed, fetched from the external source
+	// and then added to the list by calling AddTrustedIssuerURL method.
 	TrustedIssuerNotFoundFallback TrustedIssNotFoundFallback
 
 	// LoggerProvider is a function that provides a logger for the Parser.
 	LoggerProvider func(ctx context.Context) log.FieldLogger
 
-	// ClaimsTemplate is a template for claims object that will be used for unmarshalling JWT.
-	// By default, DefaultClaims is used.
+	// ClaimsTemplate is a template for claims object.
+	// It usually used for the custom claims object that implements Claims interface.
+	// If it's not specified, DefaultClaims will be used.
 	ClaimsTemplate Claims
 
 	// ScopeFilter is a filter that will be applied to access policies in JWT scope after parsing.
@@ -58,8 +63,6 @@ type ParserOpts struct {
 	// It's useful when the CachingParser is used, and we want to store only some of the access policies in the cache to reduce memory usage.
 	ScopeFilter ScopeFilter
 }
-
-type audienceMatcher func(aud string) bool
 
 // TrustedIssNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
 // For example, it could be analyzed and then added to the list by calling AddTrustedIssuerURL method.
@@ -69,7 +72,7 @@ type TrustedIssNotFoundFallback func(ctx context.Context, p *Parser, iss string)
 type Parser struct {
 	parser               *jwtgo.Parser
 	claimsTemplate       Claims
-	customValidator      func(claims Claims) error
+	audienceValidator    *AudienceValidator
 	skipClaimsValidation bool
 	keysProvider         KeysProvider
 
@@ -88,10 +91,6 @@ func NewParser(keysProvider KeysProvider) *Parser {
 
 // NewParserWithOpts creates new JWT parser with specified keys provider and additional options.
 func NewParserWithOpts(keysProvider KeysProvider, opts ParserOpts) *Parser {
-	var audienceMatchers []audienceMatcher
-	for _, audPattern := range opts.ExpectedAudience {
-		audienceMatchers = append(audienceMatchers, glob.Compile(audPattern))
-	}
 	parserOpts := []jwtgo.ParserOption{jwtgo.WithExpirationRequired()}
 	if opts.SkipClaimsValidation {
 		parserOpts = append(parserOpts, jwtgo.WithoutClaimsValidation())
@@ -102,7 +101,7 @@ func NewParserWithOpts(keysProvider KeysProvider, opts ParserOpts) *Parser {
 	}
 	return &Parser{
 		parser:                        jwtgo.NewParser(parserOpts...),
-		customValidator:               makeCustomAudienceValidator(opts.RequireAudience, audienceMatchers),
+		audienceValidator:             NewAudienceValidator(opts.RequireAudience, opts.ExpectedAudience),
 		skipClaimsValidation:          opts.SkipClaimsValidation,
 		keysProvider:                  keysProvider,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
@@ -165,7 +164,7 @@ func (p *Parser) Parse(ctx context.Context, token string) (Claims, error) {
 	}
 
 	if !p.skipClaimsValidation {
-		if err := p.customValidator(claims); err != nil {
+		if err := p.audienceValidator.Validate(claims); err != nil {
 			return nil, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
 		}
 	}
@@ -219,31 +218,4 @@ func (p *Parser) getURLForIssuerWithCallback(ctx context.Context, issuer string)
 		return "", false
 	}
 	return p.trustedIssuerNotFoundFallback(ctx, p, issuer)
-}
-
-func makeCustomAudienceValidator(requireAudience bool, audienceMatchers []audienceMatcher) func(c Claims) error {
-	return func(c Claims) error {
-		audience, err := c.GetAudience()
-		if err != nil {
-			return err
-		}
-		if len(audience) == 0 {
-			if requireAudience {
-				return fmt.Errorf("%w: %w", jwtgo.ErrTokenRequiredClaimMissing, &AudienceMissingError{c})
-			}
-			return nil
-		}
-
-		if len(audienceMatchers) == 0 {
-			return nil
-		}
-		for i := range audienceMatchers {
-			for j := range audience {
-				if audienceMatchers[i](audience[j]) {
-					return nil
-				}
-			}
-		}
-		return fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidAudience, &AudienceNotExpectedError{c, audience})
-	}
 }
