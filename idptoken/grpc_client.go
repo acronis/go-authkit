@@ -165,12 +165,31 @@ func (c *GRPCClient) IntrospectToken(
 	}, nil
 }
 
+type exchangeTokenOptions struct {
+	notRequiredIntrospection bool
+}
+
+// ExchangeTokenOption is an option for the ExchangeToken method.
+type ExchangeTokenOption func(*exchangeTokenOptions)
+
+// WithNotRequiredIntrospection specifies that the new issued token will not require introspection.
+func WithNotRequiredIntrospection(b bool) ExchangeTokenOption {
+	return func(opts *exchangeTokenOptions) {
+		opts.notRequiredIntrospection = b
+	}
+}
+
 // ExchangeToken exchanges the token requesting a new token with the specified version.
-func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, tokenVersion uint32) (TokenData, error) {
+func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, opts ...ExchangeTokenOption) (TokenData, error) {
+	var options exchangeTokenOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	req := pb.CreateTokenRequest{
-		GrantType:    idputil.GrantTypeJWTBearer,
-		Assertion:    token,
-		TokenVersion: tokenVersion,
+		GrantType:                idputil.GrantTypeJWTBearer,
+		Assertion:                token,
+		NotRequiredIntrospection: options.notRequiredIntrospection,
 	}
 
 	var resp *pb.CreateTokenResponse

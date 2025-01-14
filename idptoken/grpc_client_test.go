@@ -26,28 +26,22 @@ import (
 func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	tokenExpiresIn := time.Hour
 	tokenExpiresAt := time.Now().Add(time.Hour)
-	tokenV1 := idptest.MustMakeTokenStringSignedWithTestKey(&VersionedClaims{
-		DefaultClaims: jwt.DefaultClaims{
-			RegisteredClaims: jwtgo.RegisteredClaims{
-				Subject:   "test-subject",
-				ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
-			},
+	riToken := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{
+		RegisteredClaims: jwtgo.RegisteredClaims{
+			Subject:   "test-subject",
+			ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
 		},
-		Version: 1,
 	})
-	tokenV2 := idptest.MustMakeTokenStringSignedWithTestKey(&VersionedClaims{
-		DefaultClaims: jwt.DefaultClaims{
-			RegisteredClaims: jwtgo.RegisteredClaims{
-				Subject:   "test-subject",
-				ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
-			},
+	nriToken := idptest.MustMakeTokenStringWithHeader(&jwt.DefaultClaims{
+		RegisteredClaims: jwtgo.RegisteredClaims{
+			Subject:   "test-subject",
+			ExpiresAt: jwtgo.NewNumericDate(tokenExpiresAt),
 		},
-		Version: 2,
-	})
+	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"nri": true})
 
 	grpcServerTokenCreator := testing.NewGRPCServerTokenCreatorMock()
-	grpcServerTokenCreator.SetResultForToken(tokenV1, &pb.CreateTokenResponse{
-		AccessToken: tokenV2,
+	grpcServerTokenCreator.SetResultForToken(riToken, &pb.CreateTokenResponse{
+		AccessToken: nriToken,
 		ExpiresIn:   int64(tokenExpiresIn.Seconds()),
 		TokenType:   idputil.TokenTypeBearer,
 	})
@@ -76,16 +70,15 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 			},
 		},
 		{
-			name:         "ok",
-			assertion:    tokenV1,
-			tokenVersion: 2,
+			name:      "ok",
+			assertion: riToken,
 			expectedRequest: &pb.CreateTokenRequest{
-				GrantType:    idputil.GrantTypeJWTBearer,
-				Assertion:    tokenV1,
-				TokenVersion: 2,
+				GrantType:                idputil.GrantTypeJWTBearer,
+				Assertion:                riToken,
+				NotRequiredIntrospection: true,
 			},
 			expectedTokenData: idptoken.TokenData{
-				AccessToken: tokenV2,
+				AccessToken: nriToken,
 				ExpiresIn:   tokenExpiresIn,
 				TokenType:   idputil.TokenTypeBearer,
 			},
@@ -93,29 +86,19 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *gotesting.T) {
-			tokenData, err := grpcClient.ExchangeToken(context.Background(), tt.assertion, tt.tokenVersion)
+			tokenData, exchangeErr := grpcClient.ExchangeToken(context.Background(), tt.assertion,
+				idptoken.WithNotRequiredIntrospection(true))
 			if tt.checkErr != nil {
-				tt.checkErr(t, err)
+				tt.checkErr(t, exchangeErr)
 			} else {
 				require.Equal(t, tt.expectedTokenData, tokenData)
 			}
 			if tt.expectedRequest != nil {
 				require.Equal(t, tt.expectedRequest.GrantType, grpcServerTokenCreator.LastRequest.GrantType)
 				require.Equal(t, tt.expectedRequest.Assertion, grpcServerTokenCreator.LastRequest.Assertion)
-				require.Equal(t, tt.expectedRequest.TokenVersion, grpcServerTokenCreator.LastRequest.TokenVersion)
+				require.Equal(t, tt.expectedRequest.NotRequiredIntrospection,
+					grpcServerTokenCreator.LastRequest.NotRequiredIntrospection)
 			}
 		})
-	}
-}
-
-type VersionedClaims struct {
-	jwt.DefaultClaims
-	Version int `json:"ver"`
-}
-
-func (c *VersionedClaims) Clone() jwt.Claims {
-	return &VersionedClaims{
-		DefaultClaims: *c.DefaultClaims.Clone().(*jwt.DefaultClaims),
-		Version:       c.Version,
 	}
 }

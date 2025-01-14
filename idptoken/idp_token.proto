@@ -24,10 +24,11 @@ service IDPTokenService {
 }
 
 message CreateTokenRequest {
-  reserved 4 to 50;
+  reserved 5 to 50;
+  reserved 3;
   string grant_type = 1; // example: urn:ietf:params:oauth:grant-type:jwt-bearer
   string assertion = 2;
-  uint32 token_version = 3;
+  bool not_required_introspection = 4;
 }
 
 message CreateTokenResponse {
