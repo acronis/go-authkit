@@ -183,6 +183,7 @@ func (pm *PrometheusMetrics) MustRegister() {
 	prometheus.MustRegister(
 		pm.HTTPClientRequestDuration,
 		pm.GRPCClientRequestDuration,
+		pm.TokenIntrospectionsTotal,
 	)
 	pm.TokenClaimsCache.MustRegister()
 	pm.TokenNegativeCache.MustRegister()
@@ -193,6 +194,7 @@ func (pm *PrometheusMetrics) MustRegister() {
 func (pm *PrometheusMetrics) Unregister() {
 	prometheus.Unregister(pm.HTTPClientRequestDuration)
 	prometheus.Unregister(pm.GRPCClientRequestDuration)
+	prometheus.Unregister(pm.TokenIntrospectionsTotal)
 	pm.TokenClaimsCache.Unregister()
 	pm.TokenNegativeCache.Unregister()
 	pm.EndpointDiscoveryCache.Unregister()
