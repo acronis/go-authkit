@@ -371,7 +371,10 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 		return nil, err
 	}
 
-	// If introspection is unauthorized, then invalidate access token provider's cache and try again.
+	// If introspection is unauthorized, it is required to:
+	// 1. Drop current session id to issue an access token anew
+	i.GRPCClient.sessionID = ""
+	// 2. Invalidate access token provider's cache and try again.
 	// To avoid invalidating the cache too often, we have a threshold - minimum interval between invalidations.
 	t, ok := i.accessTokenProviderInvalidatedAt.Load().(time.Time)
 	now := time.Now()
@@ -520,9 +523,13 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 
 func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
 	return func(ctx context.Context, token string) (IntrospectionResult, error) {
-		accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
-		if err != nil {
-			return nil, fmt.Errorf("get access token for doing introspection: %w", err)
+		var err error
+		var accessToken string
+		if i.GRPCClient.sessionID == "" {
+			accessToken, err = i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
+			if err != nil {
+				return nil, fmt.Errorf("get access token for doing introspection: %w", err)
+			}
 		}
 		res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
 		if err != nil {

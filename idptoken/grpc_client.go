@@ -30,7 +30,10 @@ import (
 // DefaultGRPCClientRequestTimeout is a default timeout for the gRPC requests.
 const DefaultGRPCClientRequestTimeout = time.Second * 30
 
-const grpcMetaAuthorization = "authorization"
+const (
+	grpcMetaAuthorization = "authorization"
+	grpcMetaSessionID     = "x-caching-idp-session-id"
+)
 
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
@@ -54,6 +57,8 @@ type GRPCClient struct {
 	clientConn  *grpc.ClientConn
 	reqTimeout  time.Duration
 	promMetrics *metrics.PrometheusMetrics
+
+	sessionID string
 }
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
@@ -117,7 +122,11 @@ func (c *GRPCClient) IntrospectToken(
 		req.ScopeFilter[i] = &pb.IntrospectionScopeFilter{ResourceNamespace: scopeFilter[i].ResourceNamespace}
 	}
 
-	ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+	if c.sessionID != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaSessionID, c.sessionID)
+	} else {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+	}
 
 	var resp *pb.IntrospectTokenResponse
 	if err := c.do(ctx, "IDPTokenService/IntrospectToken", func(ctx context.Context) error {
@@ -126,6 +135,12 @@ func (c *GRPCClient) IntrospectToken(
 		return innerErr
 	}); err != nil {
 		return nil, err
+	}
+
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if sessionIDList := md.Get(grpcMetaSessionID); len(sessionIDList) > 0 {
+			c.sessionID = sessionIDList[0]
+		}
 	}
 
 	claims := jwt.DefaultClaims{
