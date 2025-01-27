@@ -43,10 +43,6 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
 	defer func() { grpcIDPSrv.GracefulStop() }()
 
-	grpcClient, err := idptoken.NewGRPCClient(grpcIDPSrv.Addr(), insecure.NewCredentials())
-	require.NoError(t, err)
-	defer func() { require.NoError(t, grpcClient.Close()) }()
-
 	jwtScopeToGRPC := func(jwtScope []jwt.AccessPolicy) []*pb.AccessTokenScope {
 		grpcScope := make([]*pb.AccessTokenScope, len(jwtScope))
 		for i, scope := range jwtScope {
@@ -159,6 +155,7 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 
 	tests := []struct {
 		name                    string
+		useGRPCClient           bool
 		introspectorOpts        idptoken.IntrospectorOpts
 		tokenToIntrospect       string
 		accessToken             string
@@ -390,9 +387,9 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			expectedHTTPSrvCalled: true,
 		},
 		{
-			name: "ok, grpc introspection endpoint, opaque token",
+			name:          "ok, grpc introspection endpoint, opaque token",
+			useGRPCClient: true,
 			introspectorOpts: idptoken.IntrospectorOpts{
-				GRPCClient: grpcClient,
 				ScopeFilter: jwt.ScopeFilter{
 					{ResourceNamespace: "account-server"},
 					{ResourceNamespace: "tenant-manager"},
@@ -414,10 +411,9 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			},
 		},
 		{
-			name: "error, grpc introspection endpoint, opaque token, unauthenticated",
-			introspectorOpts: idptoken.IntrospectorOpts{
-				GRPCClient: grpcClient,
-			},
+			name:              "error, grpc introspection endpoint, opaque token, unauthenticated",
+			useGRPCClient:     true,
+			introspectorOpts:  idptoken.IntrospectorOpts{},
 			tokenToIntrospect: opaqueToken,
 			accessToken:       "invalid-access-token",
 			checkError: func(t *gotesting.T, err error) {
@@ -426,9 +422,9 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			expectedGRPCSrvCalled: true,
 		},
 		{
-			name: "error, grpc introspection endpoint, jwt token, invalid audience",
+			name:          "error, grpc introspection endpoint, jwt token, invalid audience",
+			useGRPCClient: true,
 			introspectorOpts: idptoken.IntrospectorOpts{
-				GRPCClient:       grpcClient,
 				RequireAudience:  true,
 				ExpectedAudience: []string{"https://rs.my-service.com"},
 			},
@@ -440,9 +436,9 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			expectedGRPCSrvCalled: true,
 		},
 		{
-			name: "error, grpc introspection endpoint, opaque token, audience is missing",
+			name:          "error, grpc introspection endpoint, opaque token, audience is missing",
+			useGRPCClient: true,
 			introspectorOpts: idptoken.IntrospectorOpts{
-				GRPCClient:       grpcClient,
 				RequireAudience:  true,
 				ExpectedAudience: []string{"https://rs.my-service.com"},
 			},
@@ -458,6 +454,13 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *gotesting.T) {
+			if tt.useGRPCClient {
+				// gRPC client is created and used by condition to avoid preserving its state (sessionID) between tests
+				grpcClient, err := idptoken.NewGRPCClient(grpcIDPSrv.Addr(), insecure.NewCredentials())
+				require.NoError(t, err)
+				defer func() { require.NoError(t, grpcClient.Close()) }()
+				tt.introspectorOpts.GRPCClient = grpcClient
+			}
 			if tt.accessToken == "" {
 				tt.accessToken = validAccessToken
 			}
