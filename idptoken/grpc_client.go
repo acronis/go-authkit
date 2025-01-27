@@ -8,8 +8,10 @@ package idptoken
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/acronis/go-appkit/log"
@@ -33,6 +35,7 @@ const DefaultGRPCClientRequestTimeout = time.Second * 30
 const (
 	grpcMetaAuthorization = "authorization"
 	grpcMetaRequestID     = "x-request-id"
+	grpcMetaSessionID     = "x-session-id"
 )
 
 // GRPCClientOpts contains options for the GRPCClient.
@@ -62,6 +65,8 @@ type GRPCClient struct {
 	reqTimeout        time.Duration
 	promMetrics       *metrics.PrometheusMetrics
 	requestIDProvider func(ctx context.Context) string
+
+	sessionID atomic.Value
 }
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
@@ -126,18 +131,31 @@ func (c *GRPCClient) IntrospectToken(
 		req.ScopeFilter[i] = &pb.IntrospectionScopeFilter{ResourceNamespace: scopeFilter[i].ResourceNamespace}
 	}
 
-	ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+	if sessID := c.getSessionID(); sessID != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaSessionID, sessID)
+	} else {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+	}
 	if c.requestIDProvider != nil {
 		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaRequestID, c.requestIDProvider(ctx))
 	}
 
+	var headerMD metadata.MD
+	var opts = []grpc.CallOption{grpc.Header(&headerMD)}
 	var resp *pb.IntrospectTokenResponse
 	if err := c.do(ctx, "IDPTokenService/IntrospectToken", func(ctx context.Context) error {
 		var innerErr error
-		resp, innerErr = c.client.IntrospectToken(ctx, &req)
+		resp, innerErr = c.client.IntrospectToken(ctx, &req, opts...)
 		return innerErr
 	}); err != nil {
+		if errors.Is(err, ErrUnauthenticated) {
+			c.setSessionID("")
+		}
 		return nil, err
+	}
+
+	if sessionIDMeta := headerMD.Get(grpcMetaSessionID); len(sessionIDMeta) > 0 {
+		c.setSessionID(sessionIDMeta[0])
 	}
 
 	claims := jwt.DefaultClaims{
@@ -175,6 +193,18 @@ func (c *GRPCClient) IntrospectToken(
 		TokenType:     resp.GetTokenType(),
 		DefaultClaims: claims,
 	}, nil
+}
+
+func (c *GRPCClient) getSessionID() string {
+	id, ok := c.sessionID.Load().(string)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
+func (c *GRPCClient) setSessionID(id string) {
+	c.sessionID.Store(id)
 }
 
 type exchangeTokenOptions struct {
