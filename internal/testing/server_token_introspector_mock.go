@@ -9,9 +9,12 @@ package testing
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/url"
+	"strconv"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -95,6 +98,10 @@ func (m *HTTPServerTokenIntrospectorMock) ResetCallsInfo() {
 	m.LastFormValues = nil
 }
 
+const (
+	TestMetaRequestedRespCode = "x-requested-resp-code"
+)
+
 type GRPCServerTokenIntrospectorMock struct {
 	JWTParser JWTParser
 
@@ -105,6 +112,7 @@ type GRPCServerTokenIntrospectorMock struct {
 
 	Called                bool
 	LastAuthorizationMeta string
+	LastSessionMeta       string
 	LastRequest           *pb.IntrospectTokenRequest
 }
 
@@ -136,13 +144,38 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	} else {
 		m.LastAuthorizationMeta = ""
 	}
+	if mdVal := metadata.ValueFromIncomingContext(ctx, "x-session-id"); len(mdVal) != 0 {
+		m.LastSessionMeta = mdVal[0]
+	} else {
+		m.LastSessionMeta = ""
+	}
+	var requestedResponseCode codes.Code
+	if mdVal := metadata.ValueFromIncomingContext(ctx, TestMetaRequestedRespCode); len(mdVal) != 0 {
+		if code, err := strconv.ParseUint(mdVal[0], 10, 32); err == nil {
+			requestedResponseCode = codes.Code(code)
+		}
+	} else {
+		requestedResponseCode = 0
+	}
 	m.LastRequest = req
 
-	if m.LastAuthorizationMeta == "" {
-		return nil, status.Error(codes.Unauthenticated, "Access Token is missing")
+	if requestedResponseCode != 0 {
+		return nil, status.Error(requestedResponseCode, "Explicitly requested response code is returned")
 	}
-	if m.LastAuthorizationMeta != "Bearer "+m.accessTokenForIntrospection {
+
+	if m.LastAuthorizationMeta == "" && m.LastSessionMeta == "" {
+		return nil, status.Error(codes.Unauthenticated, "Access Token or Session ID is missing")
+	}
+	if m.LastAuthorizationMeta != "" && m.LastAuthorizationMeta != "Bearer "+m.accessTokenForIntrospection {
 		return nil, status.Error(codes.Unauthenticated, "Access Token is invalid")
+	}
+	if m.LastSessionMeta != "" && m.LastSessionMeta != GenerateSessionID(m.accessTokenForIntrospection) {
+		return nil, status.Error(codes.Unauthenticated, "Session ID is invalid")
+	}
+
+	sessionMD := metadata.Pairs("x-session-id", GenerateSessionID(m.accessTokenForIntrospection))
+	if err := grpc.SetHeader(ctx, sessionMD); err != nil {
+		return nil, status.Error(codes.Internal, "set x-session-id header")
 	}
 
 	if result, ok := m.introspectionResults[tokenToKey(req.Token)]; ok {
@@ -172,9 +205,15 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 func (m *GRPCServerTokenIntrospectorMock) ResetCallsInfo() {
 	m.Called = false
 	m.LastAuthorizationMeta = ""
+	m.LastSessionMeta = ""
 	m.LastRequest = nil
 }
 
 func tokenToKey(token string) [sha256.Size]byte {
 	return sha256.Sum256([]byte(token))
+}
+
+func GenerateSessionID(token string) string {
+	sha := sha256.Sum256([]byte(token))
+	return base64.StdEncoding.EncodeToString(sha[:32])
 }
