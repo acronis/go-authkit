@@ -46,7 +46,9 @@ func runApp() error {
 
 	idpSrv := idptest.NewHTTPServer(
 		idptest.WithHTTPAddress(idpAddr),
-		idptest.WithHTTPMiddleware(middleware.Logging(logger)),
+		idptest.WithHTTPMiddleware(func(handler http.Handler) http.Handler {
+			return middleware.RequestID()(middleware.Logging(logger)(handler))
+		}),
 		idptest.WithHTTPClaimsProvider(&demoClaimsProvider{}),
 		idptest.WithHTTPTokenIntrospector(&demoTokenIntrospector{jwtParser: jwtParser}),
 	)

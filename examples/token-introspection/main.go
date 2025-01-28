@@ -88,7 +88,8 @@ func runApp() error {
 		tokenSubject, _ := jwtClaims.GetSubject()                 // error is always nil here unless custom claims are used
 		_, _ = rw.Write([]byte(fmt.Sprintf("Hi, %s", tokenSubject)))
 	})))
-	if err = http.ListenAndServe(":8080", middleware.Logging(logger)(srvMux)); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	srvHandler := middleware.RequestID()(middleware.Logging(logger)(srvMux))
+	if err = http.ListenAndServe(":8080", srvHandler); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)
 	}
 

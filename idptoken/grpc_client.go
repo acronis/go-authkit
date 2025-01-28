@@ -30,12 +30,19 @@ import (
 // DefaultGRPCClientRequestTimeout is a default timeout for the gRPC requests.
 const DefaultGRPCClientRequestTimeout = time.Second * 30
 
-const grpcMetaAuthorization = "authorization"
+const (
+	grpcMetaAuthorization = "authorization"
+	grpcMetaRequestID     = "x-request-id"
+)
 
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
 	// LoggerProvider is a function that provides a logger for the client.
 	LoggerProvider func(ctx context.Context) log.FieldLogger
+
+	// RequestIDProvider is a function that provides a request ID for the client.
+	// This request ID will be used for outgoing gRPC requests in the x-request-id metadata.
+	RequestIDProvider func(ctx context.Context) string
 
 	// RequestTimeout is a timeout for the gRPC requests.
 	RequestTimeout time.Duration
@@ -50,10 +57,11 @@ type GRPCClientOpts struct {
 
 // GRPCClient is a client for the IDP token service that uses gRPC.
 type GRPCClient struct {
-	client      pb.IDPTokenServiceClient
-	clientConn  *grpc.ClientConn
-	reqTimeout  time.Duration
-	promMetrics *metrics.PrometheusMetrics
+	client            pb.IDPTokenServiceClient
+	clientConn        *grpc.ClientConn
+	reqTimeout        time.Duration
+	promMetrics       *metrics.PrometheusMetrics
+	requestIDProvider func(ctx context.Context) string
 }
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
@@ -81,10 +89,11 @@ func NewGRPCClientWithOpts(
 		return nil, fmt.Errorf("dial to %q: %w", target, err)
 	}
 	return &GRPCClient{
-		client:      pb.NewIDPTokenServiceClient(conn),
-		clientConn:  conn,
-		reqTimeout:  opts.RequestTimeout,
-		promMetrics: metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceGRPCClient),
+		client:            pb.NewIDPTokenServiceClient(conn),
+		clientConn:        conn,
+		reqTimeout:        opts.RequestTimeout,
+		promMetrics:       metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceGRPCClient),
+		requestIDProvider: opts.RequestIDProvider,
 	}, nil
 }
 
@@ -118,6 +127,9 @@ func (c *GRPCClient) IntrospectToken(
 	}
 
 	ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+	if c.requestIDProvider != nil {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaRequestID, c.requestIDProvider(ctx))
+	}
 
 	var resp *pb.IntrospectTokenResponse
 	if err := c.do(ctx, "IDPTokenService/IntrospectToken", func(ctx context.Context) error {
@@ -190,6 +202,10 @@ func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, opts ...Ex
 		GrantType:                idputil.GrantTypeJWTBearer,
 		Assertion:                token,
 		NotRequiredIntrospection: options.notRequiredIntrospection,
+	}
+
+	if c.requestIDProvider != nil {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaRequestID, c.requestIDProvider(ctx))
 	}
 
 	var resp *pb.CreateTokenResponse
