@@ -17,7 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -183,9 +183,10 @@ type Introspector struct {
 	// EndpointDiscoveryCache is a cache for storing OpenID configuration.
 	EndpointDiscoveryCache IntrospectionEndpointDiscoveryCache
 
-	accessTokenProvider              IntrospectionTokenProvider
-	accessTokenProviderInvalidatedAt atomic.Value
-	accessTokenScope                 []string
+	accessTokenProvider                IntrospectionTokenProvider
+	accessTokenProviderInvalidatedAtMu sync.RWMutex
+	accessTokenProviderInvalidatedAt   time.Time
+	accessTokenScope                   []string
 
 	resultTemplate IntrospectionResult
 
@@ -362,6 +363,10 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 		return nil, err
 	}
 
+	i.accessTokenProviderInvalidatedAtMu.RLock()
+	invalidatedAtBefore := i.accessTokenProviderInvalidatedAt
+	i.accessTokenProviderInvalidatedAtMu.RUnlock()
+
 	result, err := introspectFn(ctx, token)
 	if err == nil {
 		return result, nil
@@ -371,16 +376,27 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 		return nil, err
 	}
 
-	// If introspection is unauthorized, then invalidate access token provider's cache and try again.
-	// To avoid invalidating the cache too often, we have a threshold - minimum interval between invalidations.
-	t, ok := i.accessTokenProviderInvalidatedAt.Load().(time.Time)
-	now := time.Now()
-	if !ok || now.Sub(t) > minAccessTokenProviderInvalidationInterval {
+	invalidateAccessTokenProvider := func() bool {
+		i.accessTokenProviderInvalidatedAtMu.Lock()
+		defer i.accessTokenProviderInvalidatedAtMu.Unlock()
+
+		if invalidatedAtBefore != i.accessTokenProviderInvalidatedAt {
+			return true // The cache was already invalidated by another goroutine.
+		}
+		now := time.Now()
+		if now.Sub(i.accessTokenProviderInvalidatedAt) < minAccessTokenProviderInvalidationInterval {
+			return false // The original error will be returned if the cache was invalidated too recently.
+		}
 		i.accessTokenProvider.Invalidate()
-		i.accessTokenProviderInvalidatedAt.Store(now)
-		return introspectFn(ctx, token)
+		i.accessTokenProviderInvalidatedAt = now
+		return true
 	}
-	return nil, err
+
+	if !invalidateAccessTokenProvider() {
+		return nil, err
+	}
+
+	return introspectFn(ctx, token)
 }
 
 type introspectFunc func(ctx context.Context, token string) (IntrospectionResult, error)
