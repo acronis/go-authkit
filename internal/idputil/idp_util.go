@@ -32,7 +32,11 @@ const (
 
 var DefaultLogger = log.NewDisabledLogger()
 
-func MakeDefaultHTTPClient(reqTimeout time.Duration, loggerProvider func(ctx context.Context) log.FieldLogger) *http.Client {
+func MakeDefaultHTTPClient(
+	reqTimeout time.Duration,
+	loggerProvider func(ctx context.Context) log.FieldLogger,
+	requestIDProvider func(ctx context.Context) string,
+) *http.Client {
 	if reqTimeout == 0 {
 		reqTimeout = DefaultHTTPRequestTimeout
 	}
@@ -43,6 +47,11 @@ func MakeDefaultHTTPClient(reqTimeout time.Duration, loggerProvider func(ctx con
 	}
 	tr, _ = httpclient.NewRetryableRoundTripperWithOpts(tr, retryableOpts) // error is always nil
 	tr = httpclient.NewUserAgentRoundTripper(tr, libinfo.UserAgent())
+	if requestIDProvider != nil {
+		tr = httpclient.NewRequestIDRoundTripperWithOpts(tr, httpclient.RequestIDRoundTripperOpts{
+			RequestIDProvider: requestIDProvider,
+		})
+	}
 	return &http.Client{Timeout: reqTimeout, Transport: tr}
 }
 

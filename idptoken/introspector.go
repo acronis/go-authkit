@@ -255,7 +255,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 	}
 
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider)
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil)
 	}
 
 	values := url.Values{}
