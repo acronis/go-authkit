@@ -185,7 +185,7 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 	}
 	if p.httpClient == nil {
 		p.httpClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout,
-			func(_ context.Context) log.FieldLogger { return p.logger })
+			func(_ context.Context) log.FieldLogger { return p.logger }, nil)
 	}
 
 	for _, source := range sources {

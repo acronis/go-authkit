@@ -29,7 +29,10 @@ import (
 // NewJWTParser creates a new JWTParser with the given configuration.
 // If cfg.JWT.ClaimsCache.Enabled is true, then jwt.CachingParser created, otherwise - jwt.Parser.
 func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
-	options := jwtParserOptions{loggerProvider: middleware.GetLoggerFromContext}
+	options := jwtParserOptions{
+		loggerProvider:    middleware.GetLoggerFromContext,
+		requestIDProvider: middleware.GetRequestIDFromContext,
+	}
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -39,10 +42,11 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	if jwksCacheUpdateMinInterval == 0 {
 		jwksCacheUpdateMinInterval = jwks.DefaultCacheUpdateMinInterval
 	}
+	httpClient := idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider, options.requestIDProvider)
 	jwksClientOpts := jwks.CachingClientOpts{
 		ClientOpts: jwks.ClientOpts{
 			LoggerProvider:             options.loggerProvider,
-			HTTPClient:                 idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider),
+			HTTPClient:                 httpClient,
 			PrometheusLibInstanceLabel: options.prometheusLibInstanceLabel,
 		},
 		CacheUpdateMinInterval: jwksCacheUpdateMinInterval,
@@ -88,6 +92,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 
 type jwtParserOptions struct {
 	loggerProvider                func(ctx context.Context) log.FieldLogger
+	requestIDProvider             func(ctx context.Context) string
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback jwt.TrustedIssNotFoundFallback
 	claimsTemplate                jwt.Claims
@@ -98,9 +103,21 @@ type jwtParserOptions struct {
 type JWTParserOption func(options *jwtParserOptions)
 
 // WithJWTParserLoggerProvider sets the logger provider for JWTParser.
+// By default, the logger is taken from the incoming request context using middleware.GetLoggerFromContext function
+// from the github.com/acronis/go-appkit library.
 func WithJWTParserLoggerProvider(loggerProvider func(ctx context.Context) log.FieldLogger) JWTParserOption {
 	return func(options *jwtParserOptions) {
 		options.loggerProvider = loggerProvider
+	}
+}
+
+// WithJWTParserRequestIDProvider sets the request ID provider for JWTParser.
+// This request ID will be used in the outgoing HTTP (X-Request-ID header) requests to JWKS endpoint.
+// By default, the request ID is taken from the incoming request context using middleware.GetRequestIDFromContext function
+// from the github.com/acronis/go-appkit library.
+func WithJWTParserRequestIDProvider(requestIDProvider func(ctx context.Context) string) JWTParserOption {
+	return func(options *jwtParserOptions) {
+		options.requestIDProvider = requestIDProvider
 	}
 }
 
@@ -146,7 +163,10 @@ func NewTokenIntrospector(
 	scopeFilter jwt.ScopeFilter,
 	opts ...TokenIntrospectorOption,
 ) (*idptoken.Introspector, error) {
-	options := tokenIntrospectorOptions{loggerProvider: middleware.GetLoggerFromContext}
+	options := tokenIntrospectorOptions{
+		loggerProvider:    middleware.GetLoggerFromContext,
+		requestIDProvider: middleware.GetRequestIDFromContext,
+	}
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -163,9 +183,10 @@ func NewTokenIntrospector(
 			return nil, fmt.Errorf("make grpc transport credentials: %w", err)
 		}
 		grpcClientOpts := idptoken.GRPCClientOpts{
-			RequestTimeout: cfg.GRPCClient.RequestTimeout,
-			LoggerProvider: options.loggerProvider,
-			UserAgent:      libinfo.UserAgent(),
+			RequestTimeout:    cfg.GRPCClient.RequestTimeout,
+			LoggerProvider:    options.loggerProvider,
+			RequestIDProvider: options.requestIDProvider,
+			UserAgent:         libinfo.UserAgent(),
 		}
 		if grpcClient, err = idptoken.NewGRPCClientWithOpts(
 			cfg.Introspection.GRPC.Endpoint, transportCreds, grpcClientOpts,
@@ -174,10 +195,12 @@ func NewTokenIntrospector(
 		}
 	}
 
+	httpClient := idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider, options.requestIDProvider)
+
 	introspectorOpts := idptoken.IntrospectorOpts{
 		HTTPEndpoint:                  cfg.Introspection.Endpoint,
 		GRPCClient:                    grpcClient,
-		HTTPClient:                    idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider),
+		HTTPClient:                    httpClient,
 		AccessTokenScope:              cfg.Introspection.AccessTokenScope,
 		LoggerProvider:                options.loggerProvider,
 		ResultTemplate:                options.resultTemplate,
@@ -211,6 +234,7 @@ func NewTokenIntrospector(
 
 type tokenIntrospectorOptions struct {
 	loggerProvider                func(ctx context.Context) log.FieldLogger
+	requestIDProvider             func(ctx context.Context) string
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback idptoken.TrustedIssNotFoundFallback
 	resultTemplate                idptoken.IntrospectionResult
@@ -220,9 +244,22 @@ type tokenIntrospectorOptions struct {
 type TokenIntrospectorOption func(options *tokenIntrospectorOptions)
 
 // WithTokenIntrospectorLoggerProvider sets the logger provider for TokenIntrospector.
+// By default, the logger is taken from the incoming request context using middleware.GetLoggerFromContext function
+// from the github.com/acronis/go-appkit library.
 func WithTokenIntrospectorLoggerProvider(loggerProvider func(ctx context.Context) log.FieldLogger) TokenIntrospectorOption {
 	return func(options *tokenIntrospectorOptions) {
 		options.loggerProvider = loggerProvider
+	}
+}
+
+// WithTokenIntrospectorRequestIDProvider sets the request ID provider for TokenIntrospector.
+// This request ID will be used in the HTTP (X-Request-ID header)
+// and gRPC (x-request-id metadata) introspection requests.
+// By default, the request ID is taken from the incoming request context using middleware.GetRequestIDFromContext function
+// from the github.com/acronis/go-appkit library.
+func WithTokenIntrospectorRequestIDProvider(requestIDProvider func(ctx context.Context) string) TokenIntrospectorOption {
+	return func(options *tokenIntrospectorOptions) {
+		options.requestIDProvider = requestIDProvider
 	}
 }
 
