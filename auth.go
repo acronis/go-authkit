@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/acronis/go-appkit/httpserver/middleware"
 	"github.com/acronis/go-appkit/log"
@@ -38,11 +39,12 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	}
 
 	// Make caching JWKS client.
-	jwksCacheUpdateMinInterval := cfg.JWKS.Cache.UpdateMinInterval
+	jwksCacheUpdateMinInterval := time.Duration(cfg.JWKS.Cache.UpdateMinInterval)
 	if jwksCacheUpdateMinInterval == 0 {
 		jwksCacheUpdateMinInterval = jwks.DefaultCacheUpdateMinInterval
 	}
-	httpClient := idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider, options.requestIDProvider)
+	httpClient := idputil.MakeDefaultHTTPClient(
+		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider)
 	jwksClientOpts := jwks.CachingClientOpts{
 		ClientOpts: jwks.ClientOpts{
 			LoggerProvider:             options.loggerProvider,
@@ -183,7 +185,7 @@ func NewTokenIntrospector(
 			return nil, fmt.Errorf("make grpc transport credentials: %w", err)
 		}
 		grpcClientOpts := idptoken.GRPCClientOpts{
-			RequestTimeout:    cfg.GRPCClient.RequestTimeout,
+			RequestTimeout:    time.Duration(cfg.GRPCClient.RequestTimeout),
 			LoggerProvider:    options.loggerProvider,
 			RequestIDProvider: options.requestIDProvider,
 			UserAgent:         libinfo.UserAgent(),
@@ -195,7 +197,8 @@ func NewTokenIntrospector(
 		}
 	}
 
-	httpClient := idputil.MakeDefaultHTTPClient(cfg.HTTPClient.RequestTimeout, options.loggerProvider, options.requestIDProvider)
+	httpClient := idputil.MakeDefaultHTTPClient(
+		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider)
 
 	introspectorOpts := idptoken.IntrospectorOpts{
 		HTTPEndpoint:                  cfg.Introspection.Endpoint,
@@ -210,12 +213,12 @@ func NewTokenIntrospector(
 		ClaimsCache: idptoken.IntrospectorCacheOpts{
 			Enabled:    cfg.Introspection.ClaimsCache.Enabled,
 			MaxEntries: cfg.Introspection.ClaimsCache.MaxEntries,
-			TTL:        cfg.Introspection.ClaimsCache.TTL,
+			TTL:        time.Duration(cfg.Introspection.ClaimsCache.TTL),
 		},
 		NegativeCache: idptoken.IntrospectorCacheOpts{
 			Enabled:    cfg.Introspection.NegativeCache.Enabled,
 			MaxEntries: cfg.Introspection.NegativeCache.MaxEntries,
-			TTL:        cfg.Introspection.NegativeCache.TTL,
+			TTL:        time.Duration(cfg.Introspection.NegativeCache.TTL),
 		},
 		RequireAudience:  cfg.JWT.RequireAudience,
 		ExpectedAudience: cfg.JWT.ExpectedAudience,
