@@ -9,5 +9,3 @@ auth:
     claimsCache:
       enabled: true
       maxEntries: 1000
-  introspection:
-    enabled: true
