@@ -1,6 +1,10 @@
 # AuthN Middleware Example
 
-The example below demonstrates how to create a simple HTTP server that authenticates requests with JWT tokens.
+The current example demonstrates how to create a simple HTTP server that authenticates requests with JWT tokens.
+
+The complete code example is available in the [main.go](./main.go) file.
+
+Configuration is stored in the [config.yml](./config.yml) file.
 
 ## Usage
 

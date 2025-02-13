@@ -1,7 +1,11 @@
 # Token Introspection Example
 
-The example below demonstrates how to create a simple HTTP server that authenticates requests with JWT tokens using the token introspection endpoint.
+The current example demonstrates how to create a simple HTTP server that authenticates requests with JWT tokens using the token introspection endpoint.
 Additionally, it performs authorization based on the introspected token's scope.
+
+The complete code example is available in the [main.go](./main.go) file.
+
+Configuration is stored in the [config.yml](./config.yml) file.
 
 ## Usage
 
@@ -108,7 +112,7 @@ auth:
         clientKey: <path_to_client_key>
 ```
 
-If you want to test introspection via gRPC, you can use the [gRPC introspection server example](./grpc-server).
+If you want to test introspection via gRPC, you can use the [gRPC introspection server example](./grpc-server/main.go).
 To start the gRPC introspection server, just run `go run ./grpc-server/main.go`.
 
 Then modify the `config.yaml` file to use the gRPC introspection endpoint:
