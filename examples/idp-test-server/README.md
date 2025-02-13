@@ -1,6 +1,6 @@
 # IDP Test Server Example
 
-This is a simple test server that can be used to test the IDP client.
+This is a [simple test server](./main.go) that can be used to test the IDP client.
 It demonstrates how the `idptest` package can be used to create a simple IDP server.
 
 ## Usage

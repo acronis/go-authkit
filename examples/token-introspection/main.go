@@ -97,14 +97,14 @@ func runApp() error {
 }
 
 type AppConfig struct {
-	Auth *authkit.Config `config:"auth"`
-	Log  *log.Config     `config:"log"`
+	Auth *authkit.Config
+	Log  *log.Config
 }
 
 func NewAppConfig() *AppConfig {
 	return &AppConfig{
-		Log:  log.NewConfig(),
-		Auth: authkit.NewConfig(),
+		Log:  log.NewConfig(log.WithKeyPrefix("log")),
+		Auth: authkit.NewConfig(authkit.WithKeyPrefix("auth")),
 	}
 }
 
