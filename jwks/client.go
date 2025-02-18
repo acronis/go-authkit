@@ -20,6 +20,7 @@ import (
 	"github.com/mendsley/gojwk"
 
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/libinfo"
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
@@ -59,7 +60,7 @@ func NewClient() *Client {
 func NewClientWithOpts(opts ClientOpts) *Client {
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceJWKSClient)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil)
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
 	}
 	return &Client{httpClient: opts.HTTPClient, loggerProvider: opts.LoggerProvider, promMetrics: promMetrics}
 }

@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/libinfo"
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
@@ -185,7 +186,7 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 	}
 	if p.httpClient == nil {
 		p.httpClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout,
-			func(_ context.Context) log.FieldLogger { return p.logger }, nil)
+			func(_ context.Context) log.FieldLogger { return p.logger }, nil, libinfo.UserAgent())
 	}
 
 	for _, source := range sources {
