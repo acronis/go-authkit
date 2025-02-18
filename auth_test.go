@@ -14,6 +14,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	"github.com/acronis/go-authkit/idptoken"
 	"github.com/acronis/go-authkit/idptoken/pb"
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/libinfo"
 	"github.com/acronis/go-authkit/internal/testing"
 	"github.com/acronis/go-authkit/jwt"
 )
@@ -417,6 +419,97 @@ func TestNewVerifyAccessByJWTRolesMaker(t *gotesting.T) {
 	for _, c := range cases {
 		got := NewVerifyAccessByRolesInJWTMaker(c.roleNamespace)(c.roleNames...)(httptest.NewRequest(http.MethodGet, "/", nil), jwtClaims)
 		require.Equal(t, c.want, got, "want %v, got %v, roleNamespace: %v, roleNames %+v", c.want, got, c.roleNamespace, c.roleNames)
+	}
+}
+
+func TestTokenIntrospectorSetUserAgent(t *gotesting.T) {
+	const (
+		validAccessToken = "access-token-with-introspection-permission"
+		defaultUserAgent = "go-authkit/v"
+	)
+
+	httpServerIntrospector := testing.NewHTTPServerTokenIntrospectorMock()
+	httpServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+	grpcServerIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+	grpcServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+
+	httpIDPSrv := idptest.NewHTTPServer(idptest.WithHTTPTokenIntrospector(httpServerIntrospector))
+	require.NoError(t, httpIDPSrv.StartAndWaitForReady(time.Second))
+	defer func() { _ = httpIDPSrv.Shutdown(context.Background()) }()
+
+	grpcIDPSrv := idptest.NewGRPCServer(
+		idptest.WithGRPCTokenIntrospector(grpcServerIntrospector),
+	)
+	require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
+	defer func() { grpcIDPSrv.GracefulStop() }()
+
+	tests := []struct {
+		name              string
+		cfg               *Config
+		expectedUserAgent string
+	}{
+		{
+			name: "default http client user agent",
+			cfg: &Config{
+				Introspection: IntrospectionConfig{
+					Enabled:  true,
+					Endpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+				},
+			},
+		},
+		{
+			name: "custom http client user agent",
+			cfg: &Config{
+				Introspection: IntrospectionConfig{
+					Enabled:  true,
+					Endpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+				},
+			},
+			expectedUserAgent: "go-authkit/test",
+		},
+		{
+			name: "custom gRPC client user agent",
+			cfg: &Config{
+				JWT: JWTConfig{TrustedIssuerURLs: []string{httpIDPSrv.URL()}},
+				Introspection: IntrospectionConfig{
+					Enabled: true,
+					GRPC: IntrospectionGRPCConfig{
+						Endpoint: grpcIDPSrv.Addr(),
+					},
+				},
+			},
+			expectedUserAgent: "go-authkit/test",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *gotesting.T) {
+			jwtParser, err := NewJWTParser(tt.cfg)
+			require.NoError(t, err)
+			httpServerIntrospector.JWTParser = jwtParser
+			grpcServerIntrospector.JWTParser = jwtParser
+
+			opts := []TokenIntrospectorOption{}
+			if tt.expectedUserAgent != "" {
+				opts = append(opts, WithTokenIntrospectorUserAgent(tt.expectedUserAgent))
+			}
+
+			introspector, err := NewTokenIntrospector(
+				tt.cfg, idptest.NewSimpleTokenProvider(validAccessToken), nil, WithTokenIntrospectorUserAgent(tt.expectedUserAgent),
+			)
+			require.NoError(t, err)
+
+			opaqueToken := "opaque-token-" + uuid.NewString()
+			_, err = introspector.IntrospectToken(context.Background(), opaqueToken)
+			require.NoError(t, err)
+			if tt.expectedUserAgent != "" {
+				require.Equal(t, fmt.Sprintf("%s %s", tt.expectedUserAgent, libinfo.UserAgent()), httpServerIntrospector.LastUserAgentHeader)
+				if tt.cfg.Introspection.GRPC.Endpoint != "" {
+					require.Contains(t, grpcServerIntrospector.LastUserAgentMeta, tt.expectedUserAgent)
+				}
+			} else {
+				require.Contains(t, httpServerIntrospector.LastUserAgentHeader, defaultUserAgent)
+			}
+		})
 	}
 }
 

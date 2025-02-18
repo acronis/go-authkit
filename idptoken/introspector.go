@@ -26,6 +26,7 @@ import (
 	jwtgo "github.com/golang-jwt/jwt/v5"
 
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/libinfo"
 	"github.com/acronis/go-authkit/internal/metrics"
 	"github.com/acronis/go-authkit/jwt"
 )
@@ -263,7 +264,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 	}
 
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil)
+		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
 	}
 
 	values := url.Values{}

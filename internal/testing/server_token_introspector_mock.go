@@ -46,6 +46,7 @@ type HTTPServerTokenIntrospectorMock struct {
 	Called                  bool
 	LastAuthorizationHeader string
 	LastIntrospectedToken   string
+	LastUserAgentHeader     string
 	LastFormValues          url.Values
 }
 
@@ -73,6 +74,7 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 ) (idptoken.IntrospectionResult, error) {
 	m.Called = true
 	m.LastAuthorizationHeader = r.Header.Get("Authorization")
+	m.LastUserAgentHeader = r.UserAgent()
 	m.LastIntrospectedToken = token
 	m.LastFormValues = r.Form
 
@@ -124,6 +126,7 @@ type GRPCServerTokenIntrospectorMock struct {
 	LastAuthorizationMeta string
 	LastSessionMeta       string
 	LastRequest           *pb.IntrospectTokenRequest
+	LastUserAgentMeta     string
 }
 
 func NewGRPCServerTokenIntrospectorMock() *GRPCServerTokenIntrospectorMock {
@@ -152,6 +155,11 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	md, found := metadata.FromIncomingContext(ctx)
 	if !found {
 		return nil, status.Error(codes.Internal, "incoming context contains no metadata")
+	}
+	if mdVal := md.Get("user-agent"); len(mdVal) != 0 {
+		m.LastUserAgentMeta = mdVal[0]
+	} else {
+		m.LastUserAgentMeta = ""
 	}
 	if mdVal := md.Get("authorization"); len(mdVal) != 0 {
 		m.LastAuthorizationMeta = mdVal[0]

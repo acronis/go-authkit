@@ -38,13 +38,21 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 		opt(&options)
 	}
 
+	if options.userAgent == "" {
+		options.userAgent = libinfo.UserAgent()
+	} else {
+		options.userAgent = fmt.Sprintf("%s %s", options.userAgent, libinfo.UserAgent())
+	}
+
 	// Make caching JWKS client.
 	jwksCacheUpdateMinInterval := time.Duration(cfg.JWKS.Cache.UpdateMinInterval)
 	if jwksCacheUpdateMinInterval == 0 {
 		jwksCacheUpdateMinInterval = jwks.DefaultCacheUpdateMinInterval
 	}
 	httpClient := idputil.MakeDefaultHTTPClient(
-		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider)
+		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider,
+		options.requestIDProvider, options.userAgent,
+	)
 	jwksClientOpts := jwks.CachingClientOpts{
 		ClientOpts: jwks.ClientOpts{
 			LoggerProvider:             options.loggerProvider,
@@ -99,6 +107,7 @@ type jwtParserOptions struct {
 	trustedIssuerNotFoundFallback jwt.TrustedIssNotFoundFallback
 	claimsTemplate                jwt.Claims
 	scopeFilter                   jwt.ScopeFilter
+	userAgent                     string
 }
 
 // JWTParserOption is an option for creating JWTParser.
@@ -154,6 +163,13 @@ func WithJWTParserScopeFilter(scopeFilter jwt.ScopeFilter) JWTParserOption {
 	}
 }
 
+// WithJWTParserUserAgent sets the User-Agent header for HTTP requests to JWKS endpoint.
+func WithJWTParserUserAgent(userAgent string) JWTParserOption {
+	return func(options *jwtParserOptions) {
+		options.userAgent = userAgent
+	}
+}
+
 // NewTokenIntrospector creates a new TokenIntrospector with the given configuration, token provider and scope filter.
 // If cfg.Introspection.ClaimsCache.Enabled or cfg.Introspection.NegativeCache.Enabled is true,
 // then idptoken.CachingIntrospector created, otherwise - idptoken.Introspector.
@@ -173,6 +189,12 @@ func NewTokenIntrospector(
 		opt(&options)
 	}
 
+	if options.userAgent == "" {
+		options.userAgent = libinfo.UserAgent()
+	} else {
+		options.userAgent = fmt.Sprintf("%s %s", options.userAgent, libinfo.UserAgent())
+	}
+
 	if len(cfg.JWT.TrustedIssuers) == 0 && len(cfg.JWT.TrustedIssuerURLs) == 0 {
 		idputil.GetLoggerFromProvider(context.Background(), options.loggerProvider).Warn(
 			"list of trusted issuers is empty, jwt introspection may not work properly")
@@ -188,7 +210,7 @@ func NewTokenIntrospector(
 			RequestTimeout:    time.Duration(cfg.GRPCClient.RequestTimeout),
 			LoggerProvider:    options.loggerProvider,
 			RequestIDProvider: options.requestIDProvider,
-			UserAgent:         libinfo.UserAgent(),
+			UserAgent:         options.userAgent,
 		}
 		if grpcClient, err = idptoken.NewGRPCClientWithOpts(
 			cfg.Introspection.GRPC.Endpoint, transportCreds, grpcClientOpts,
@@ -198,7 +220,7 @@ func NewTokenIntrospector(
 	}
 
 	httpClient := idputil.MakeDefaultHTTPClient(
-		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider)
+		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider, options.userAgent)
 
 	introspectorOpts := idptoken.IntrospectorOpts{
 		HTTPEndpoint:                  cfg.Introspection.Endpoint,
@@ -241,6 +263,7 @@ type tokenIntrospectorOptions struct {
 	prometheusLibInstanceLabel    string
 	trustedIssuerNotFoundFallback idptoken.TrustedIssNotFoundFallback
 	resultTemplate                idptoken.IntrospectionResult
+	userAgent                     string
 }
 
 // TokenIntrospectorOption is an option for creating TokenIntrospector.
@@ -287,6 +310,13 @@ func WithTokenIntrospectorTrustedIssuerNotFoundFallback(
 func WithTokenIntrospectorResultTemplate(resultTemplate idptoken.IntrospectionResult) TokenIntrospectorOption {
 	return func(options *tokenIntrospectorOptions) {
 		options.resultTemplate = resultTemplate
+	}
+}
+
+// WithTokenIntrospectorUserAgent sets the user agent for TokenIntrospector.
+func WithTokenIntrospectorUserAgent(userAgent string) TokenIntrospectorOption {
+	return func(options *tokenIntrospectorOptions) {
+		options.userAgent = userAgent
 	}
 }
 
