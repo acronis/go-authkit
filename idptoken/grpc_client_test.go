@@ -64,7 +64,7 @@ func TestGRPCClient_IntrospectToken(t *gotesting.T) {
 		Aud:       opaqueTokenRegClaims.Audience,
 		Exp:       opaqueTokenRegClaims.ExpiresAt.Unix(),
 		Scope:     jwtScopeToGRPC(opaqueTokenScope),
-	})
+	}, nil)
 
 	grpcIDPSrv := idptest.NewGRPCServer(idptest.WithGRPCTokenIntrospector(grpcServerTokenIntrospector))
 	require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))

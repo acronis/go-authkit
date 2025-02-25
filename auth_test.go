@@ -221,7 +221,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 		Active:        true,
 		TokenType:     idputil.TokenTypeBearer,
 		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueTokenRegClaims, Scope: opaqueTokenScope},
-	})
+	}, nil)
 	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
 		Active:    true,
 		TokenType: idputil.TokenTypeBearer,
@@ -233,7 +233,7 @@ func TestNewTokenIntrospector(t *gotesting.T) {
 				RoleName:          opaqueTokenScope[0].Role,
 				ResourcePath:      opaqueTokenScope[0].ResourcePath,
 			},
-		}})
+		}}, nil)
 
 	tests := []struct {
 		name           string

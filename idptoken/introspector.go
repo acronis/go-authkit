@@ -68,6 +68,9 @@ var ErrTokenIntrospectionInvalidClaims = errors.New("introspection response clai
 // ErrUnauthenticated is returned when a request is unauthenticated.
 var ErrUnauthenticated = errors.New("request is unauthenticated")
 
+// ErrPermissionDenied is returned when a request is authenticated but has no permission to access the resource.
+var ErrPermissionDenied = errors.New("permission denied")
+
 // TrustedIssNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
 // For example, it could be analyzed and then added to the list by calling AddTrustedIssuerURL method.
 type TrustedIssNotFoundFallback func(ctx context.Context, i *Introspector, iss string) (issURL string, issFound bool)
@@ -103,12 +106,16 @@ type IntrospectorOpts struct {
 	// GRPCClient is a gRPC client for doing introspection.
 	// If it is set, then introspection will be done using this client.
 	// Otherwise, introspection will be done via HTTP.
+	// If both GRPCClient and HTTPEndpoint are set,
+	// then introspection will be done via gRPC and HTTP will be used as a fallback.
 	GRPCClient *GRPCClient
 
 	// HTTPEndpoint is a static URL for introspection.
-	// If it is set, then introspection will be done using this endpoint.
+	// If it is set, then introspection will be done using this static endpoint (see note about gRPC below).
 	// Otherwise, introspection will be done using issuer URL (/.well-known/openid-configuration response).
 	// In this case, issuer URL should be present in JWT header or payload.
+	// If both GRPCClient and HTTPEndpoint are set,
+	// then introspection will be done via gRPC and HTTP will be used as a fallback.
 	HTTPEndpoint string
 
 	// HTTPClient is an HTTP client for doing requests to /.well-known/openid-configuration and introspection endpoints.
@@ -192,8 +199,6 @@ type Introspector struct {
 
 	jwtParser *jwtgo.Parser
 
-	httpEndpoint string
-
 	scopeFilter               jwt.ScopeFilter
 	scopeFilterFormURLEncoded string
 
@@ -210,6 +215,8 @@ type Introspector struct {
 
 	claimsValidator   *jwtgo.Validator
 	audienceValidator *jwt.AudienceValidator
+
+	staticIntrospect introspectFunc
 }
 
 // DefaultIntrospectionResult is a default implementation of IntrospectionResult.
@@ -288,7 +295,7 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		resultTemplate = opts.ResultTemplate
 	}
 
-	return &Introspector{
+	introspector := &Introspector{
 		accessTokenProvider:           accessTokenProvider,
 		accessTokenScope:              opts.AccessTokenScope,
 		resultTemplate:                resultTemplate,
@@ -296,7 +303,6 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		loggerProvider:                opts.LoggerProvider,
 		GRPCClient:                    opts.GRPCClient,
 		HTTPClient:                    opts.HTTPClient,
-		httpEndpoint:                  opts.HTTPEndpoint,
 		scopeFilterFormURLEncoded:     scopeFilterFormURLEncoded,
 		scopeFilter:                   opts.ScopeFilter,
 		trustedIssuerStore:            idputil.NewTrustedIssuerStore(),
@@ -310,7 +316,9 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		endpointDiscoveryCacheTTL:     opts.EndpointDiscoveryCache.TTL,
 		claimsValidator:               jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
 		audienceValidator:             jwt.NewAudienceValidator(opts.RequireAudience, opts.ExpectedAudience),
-	}, nil
+	}
+	introspector.initStaticIntrospection(opts.HTTPEndpoint)
+	return introspector, nil
 }
 
 // IntrospectToken introspects the given token.
@@ -410,27 +418,23 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 
 	jwtHeaderEndIdx := strings.IndexByte(token, '.')
 	if jwtHeaderEndIdx == -1 {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("no JWT header found"))
+		return i.getStaticIntrospectFuncOrError(fmt.Errorf("no JWT header found"))
 	}
 	var jwtHeaderBytes []byte
 	if jwtHeaderBytes, err = i.jwtParser.DecodeSegment(token[:jwtHeaderEndIdx]); err != nil {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("decode JWT header: %w", err))
+		return i.getStaticIntrospectFuncOrError(fmt.Errorf("decode JWT header: %w", err))
 	}
 	jwtHeader, err := parserJWTHeader(jwtHeaderBytes)
 	if err != nil {
-		return i.makeStaticIntrospectFuncOrError(fmt.Errorf("parse JWT header: %w", err))
+		return i.getStaticIntrospectFuncOrError(fmt.Errorf("parse JWT header: %w", err))
 	}
 	if !checkIntrospectionRequiredByJWTHeader(jwtHeader) {
 		return nil, ErrTokenIntrospectionNotNeeded
 	}
 
-	// Use preconfigured gRPC client or static HTTP endpoint for introspection if they are set.
-	// gRPC has higher priority than HTTP.
-	if i.GRPCClient != nil {
-		return i.makeIntrospectFuncGRPC(), nil
-	}
-	if i.httpEndpoint != "" {
-		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
+	// If introspection endpoint is static, then use it. Otherwise, get it from issuer.
+	if i.staticIntrospect != nil {
+		return i.staticIntrospect, nil
 	}
 
 	// Try to get issuer from JWT header first and then from JWT payload.
@@ -472,12 +476,37 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	return i.makeIntrospectFuncHTTP(introspectionEndpointURL), nil
 }
 
-func (i *Introspector) makeStaticIntrospectFuncOrError(inner error) (introspectFunc, error) {
-	if i.GRPCClient != nil {
-		return i.makeIntrospectFuncGRPC(), nil
+func (i *Introspector) initStaticIntrospection(httpEndpoint string) {
+	if httpEndpoint != "" {
+		i.staticIntrospect = i.makeIntrospectFuncHTTP(httpEndpoint)
 	}
-	if i.httpEndpoint != "" {
-		return i.makeIntrospectFuncHTTP(i.httpEndpoint), nil
+
+	if i.GRPCClient != nil {
+		fallback := i.staticIntrospect // gRPC has higher priority, HTTP endpoint will be used as fallback
+		i.staticIntrospect = func(ctx context.Context, token string) (IntrospectionResult, error) {
+			accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
+			if err != nil {
+				return nil, fmt.Errorf("get access token for doing introspection: %w", err)
+			}
+			res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
+			if err == nil || errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrPermissionDenied) || ctx.Err() != nil {
+				return res, err
+			}
+			if fallback == nil {
+				return nil, err
+			}
+			var fbErr error
+			if res, fbErr = fallback(ctx, token); fbErr != nil {
+				return nil, errors.Join(err, fbErr)
+			}
+			return res, nil
+		}
+	}
+}
+
+func (i *Introspector) getStaticIntrospectFuncOrError(inner error) (introspectFunc, error) {
+	if i.staticIntrospect != nil {
+		return i.staticIntrospect, nil
 	}
 	return nil, makeTokenNotIntrospectableError(inner)
 }
@@ -516,8 +545,11 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		if resp.StatusCode != http.StatusOK {
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
-			if resp.StatusCode == http.StatusUnauthorized {
+			switch resp.StatusCode {
+			case http.StatusUnauthorized:
 				return nil, ErrUnauthenticated
+			case http.StatusForbidden:
+				return nil, ErrPermissionDenied
 			}
 			return nil, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
 		}
@@ -530,20 +562,6 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 		}
 
 		i.promMetrics.ObserveHTTPClientRequest(http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, "")
-		return res, nil
-	}
-}
-
-func (i *Introspector) makeIntrospectFuncGRPC() introspectFunc {
-	return func(ctx context.Context, token string) (IntrospectionResult, error) {
-		accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
-		if err != nil {
-			return nil, fmt.Errorf("get access token for doing introspection: %w", err)
-		}
-		res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
-		if err != nil {
-			return nil, fmt.Errorf("introspect token: %w", err)
-		}
 		return res, nil
 	}
 }

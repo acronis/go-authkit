@@ -30,10 +30,15 @@ type JWTParser interface {
 	Parse(ctx context.Context, token string) (jwt.Claims, error)
 }
 
+type httpServerIntrospectionResult struct {
+	result idptoken.IntrospectionResult
+	err    error
+}
+
 type HTTPServerTokenIntrospectorMock struct {
 	JWTParser JWTParser
 
-	introspectionResults map[[sha256.Size]byte]idptoken.IntrospectionResult
+	introspectionResults map[[sha256.Size]byte]httpServerIntrospectionResult
 	jwtScopes            map[string][]jwt.AccessPolicy
 
 	accessTokenForIntrospection string
@@ -46,13 +51,13 @@ type HTTPServerTokenIntrospectorMock struct {
 
 func NewHTTPServerTokenIntrospectorMock() *HTTPServerTokenIntrospectorMock {
 	return &HTTPServerTokenIntrospectorMock{
-		introspectionResults: make(map[[sha256.Size]byte]idptoken.IntrospectionResult),
+		introspectionResults: make(map[[sha256.Size]byte]httpServerIntrospectionResult),
 		jwtScopes:            make(map[string][]jwt.AccessPolicy),
 	}
 }
 
-func (m *HTTPServerTokenIntrospectorMock) SetResultForToken(token string, result idptoken.IntrospectionResult) {
-	m.introspectionResults[tokenToKey(token)] = result
+func (m *HTTPServerTokenIntrospectorMock) SetResultForToken(token string, result idptoken.IntrospectionResult, err error) {
+	m.introspectionResults[tokenToKey(token)] = httpServerIntrospectionResult{result, err}
 }
 
 func (m *HTTPServerTokenIntrospectorMock) SetScopeForJWTID(jwtID string, scope []jwt.AccessPolicy) {
@@ -76,7 +81,7 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	}
 
 	if result, ok := m.introspectionResults[tokenToKey(token)]; ok {
-		return result, nil
+		return result.result, result.err
 	}
 
 	claims, err := m.JWTParser.Parse(r.Context(), token)
@@ -102,10 +107,15 @@ const (
 	TestMetaRequestedRespCode = "x-requested-resp-code"
 )
 
+type grpcServerIntrospectionResult struct {
+	response *pb.IntrospectTokenResponse
+	err      error
+}
+
 type GRPCServerTokenIntrospectorMock struct {
 	JWTParser JWTParser
 
-	introspectionResults map[[sha256.Size]byte]*pb.IntrospectTokenResponse
+	introspectionResults map[[sha256.Size]byte]grpcServerIntrospectionResult
 	scopes               map[string][]*pb.AccessTokenScope
 
 	accessTokenForIntrospection string
@@ -118,13 +128,13 @@ type GRPCServerTokenIntrospectorMock struct {
 
 func NewGRPCServerTokenIntrospectorMock() *GRPCServerTokenIntrospectorMock {
 	return &GRPCServerTokenIntrospectorMock{
-		introspectionResults: make(map[[sha256.Size]byte]*pb.IntrospectTokenResponse),
+		introspectionResults: make(map[[sha256.Size]byte]grpcServerIntrospectionResult),
 		scopes:               make(map[string][]*pb.AccessTokenScope),
 	}
 }
 
-func (m *GRPCServerTokenIntrospectorMock) SetResultForToken(token string, result *pb.IntrospectTokenResponse) {
-	m.introspectionResults[tokenToKey(token)] = result
+func (m *GRPCServerTokenIntrospectorMock) SetResultForToken(token string, response *pb.IntrospectTokenResponse, err error) {
+	m.introspectionResults[tokenToKey(token)] = grpcServerIntrospectionResult{response: response, err: err}
 }
 
 func (m *GRPCServerTokenIntrospectorMock) SetScopeForJWTID(jwtID string, scope []*pb.AccessTokenScope) {
@@ -183,7 +193,7 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	}
 
 	if result, ok := m.introspectionResults[tokenToKey(req.Token)]; ok {
-		return result, nil
+		return result.response, result.err
 	}
 
 	claims, err := m.JWTParser.Parse(ctx, req.Token)

@@ -267,8 +267,11 @@ func (c *GRPCClient) do(ctx context.Context, methodName string, call func(ctx co
 			code = st.Code()
 		}
 		c.promMetrics.ObserveGRPCClientRequest(methodName, code, elapsed)
-		if code == grpccodes.Unauthenticated {
+		switch code {
+		case grpccodes.Unauthenticated:
 			return ErrUnauthenticated
+		case grpccodes.PermissionDenied:
+			return ErrPermissionDenied
 		}
 		return err
 	}

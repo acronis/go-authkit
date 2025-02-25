@@ -32,6 +32,8 @@ const localhostWithDynamicPortAddr = "127.0.0.1:0"
 
 var ErrUnauthorized = errors.New("unauthorized")
 
+var ErrPermissionDenied = errors.New("permission denied")
+
 // HTTPClaimsProvider is an interface for providing JWT claims for an issuing token request via HTTP.
 type HTTPClaimsProvider interface {
 	Provide(r *http.Request) (jwt.Claims, error)
