@@ -41,11 +41,14 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if h.ClaimsProvider != nil {
 		var err error
 		if claims, err = h.ClaimsProvider.Provide(r); err != nil {
-			if errors.Is(err, ErrUnauthorized) {
+			switch {
+			case errors.Is(err, ErrUnauthorized):
 				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
-				return
+			case errors.Is(err, ErrPermissionDenied):
+				http.Error(rw, "Permission denied", http.StatusForbidden)
+			default:
+				http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
 			}
-			http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -135,11 +138,14 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 	if h.TokenIntrospector != nil {
 		var err error
 		if introspectResult, err = h.TokenIntrospector.IntrospectToken(r, token); err != nil {
-			if errors.Is(err, ErrUnauthorized) {
+			switch {
+			case errors.Is(err, ErrUnauthorized):
 				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
-				return
+			case errors.Is(err, ErrPermissionDenied):
+				http.Error(rw, "Permission denied", http.StatusForbidden)
+			default:
+				http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
 			}
-			http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 	} else {

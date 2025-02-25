@@ -9,6 +9,7 @@ package idptoken_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	gotesting "testing"
 	"time"
@@ -16,7 +17,9 @@ import (
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/acronis/go-authkit/idptest"
 	"github.com/acronis/go-authkit/idptoken"
@@ -66,7 +69,7 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(-time.Hour)),
 		},
 	})
-	httpServerIntrospector.SetResultForToken(expiredJWT, &idptoken.DefaultIntrospectionResult{Active: false})
+	httpServerIntrospector.SetResultForToken(expiredJWT, &idptoken.DefaultIntrospectionResult{Active: false}, nil)
 
 	// Valid JWT with scope
 	validJWTScope := []jwt.AccessPolicy{{
@@ -84,19 +87,19 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	}
 	validJWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims})
 	httpServerIntrospector.SetResultForToken(validJWT, &idptoken.DefaultIntrospectionResult{Active: true,
-		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}})
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}}, nil)
 	validJWTWithAppTyp := idptest.MustMakeTokenStringWithHeader(&jwt.DefaultClaims{
 		RegisteredClaims: validJWTRegClaims,
 	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"typ": idputil.JWTTypeAppAccessToken})
 	httpServerIntrospector.SetResultForToken(validJWTWithAppTyp, &idptoken.DefaultIntrospectionResult{Active: true,
-		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}})
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}}, nil)
 	grpcServerIntrospector.SetResultForToken(validJWT, &pb.IntrospectTokenResponse{
 		Active:    true,
 		TokenType: idputil.TokenTypeBearer,
 		Aud:       validJWTRegClaims.Audience,
 		Exp:       validJWTRegClaims.ExpiresAt.Unix(),
 		Scope:     jwtScopeToGRPC(validJWTScope),
-	})
+	}, nil)
 
 	// Valid JWT with scope and custom claims fields
 	customFieldVal := uuid.NewString()
@@ -127,7 +130,7 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims, Scope: validCustomJWTScope},
 			CustomField:   customFieldVal,
 		},
-	})
+	}, nil)
 
 	// Opaque token
 	opaqueToken := "opaque-token-" + uuid.NewString()
@@ -144,14 +147,28 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		Active:        true,
 		TokenType:     idputil.TokenTypeBearer,
 		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueTokenRegClaims, Scope: opaqueTokenScope},
-	})
+	}, nil)
 	grpcServerIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
 		Active:    true,
 		TokenType: idputil.TokenTypeBearer,
 		Aud:       opaqueTokenRegClaims.Audience,
 		Exp:       opaqueTokenRegClaims.ExpiresAt.Unix(),
 		Scope:     jwtScopeToGRPC(opaqueTokenScope),
-	})
+	}, nil)
+
+	// Valid tokens, but introspection fails
+	grpcInternalErr := grpcstatus.Error(codes.Internal, "internal error")
+	validJWTRegClaimsWithGRPCErr := validJWTRegClaims
+	validJWTRegClaimsWithGRPCErr.ID = uuid.NewString()
+	validJWTWithGRPCErr := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWTRegClaimsWithGRPCErr})
+	httpServerIntrospector.SetResultForToken(validJWTWithGRPCErr, &idptoken.DefaultIntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaimsWithGRPCErr, Scope: validJWTScope}}, nil)
+	grpcServerIntrospector.SetResultForToken(validJWTWithGRPCErr, nil, grpcInternalErr)
+	opaqueTokenWithPermissionErr := "opaque-token-with-permission-err"
+	grpcServerIntrospector.SetResultForToken(opaqueTokenWithPermissionErr, nil, grpcstatus.Error(codes.PermissionDenied, "permission denied"))
+	opaqueTokenWithInternalErr := "opaque-token-with-internal-err"
+	grpcServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, grpcInternalErr)
+	httpServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, fmt.Errorf("internal error"))
 
 	tests := []struct {
 		name                    string
@@ -451,6 +468,50 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			},
 			expectedGRPCSrvCalled: true,
 		},
+		{
+			name:          "ok, grpc introspection is failed, internal error, http introspection fallback is successful",
+			useGRPCClient: true,
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+			},
+			tokenToIntrospect: validJWTWithGRPCErr,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaimsWithGRPCErr, Scope: validJWTScope},
+			},
+			expectedGRPCSrvCalled: true,
+			expectedHTTPSrvCalled: true,
+			expectedHTTPFormVals:  url.Values{"token": {validJWTWithGRPCErr}},
+		},
+		{
+			name:          "error, grpc introspection is failed, permission denied, http introspection fallback is not called",
+			useGRPCClient: true,
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+			},
+			tokenToIntrospect: opaqueTokenWithPermissionErr,
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorIs(t, err, idptoken.ErrPermissionDenied)
+			},
+			expectedGRPCSrvCalled: true,
+			expectedHTTPSrvCalled: false,
+		},
+		{
+			name:          "error, both grpc introspection and http introspection fallback are failed",
+			useGRPCClient: true,
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+				HTTPClient:   &http.Client{Timeout: time.Second * 5}, // custom HTTP client to avoid default retry policy
+			},
+			tokenToIntrospect: opaqueTokenWithInternalErr,
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorIs(t, err, grpcInternalErr)
+				require.ErrorContains(t, err, "unexpected HTTP code 500")
+			},
+			expectedGRPCSrvCalled: true,
+			expectedHTTPSrvCalled: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *gotesting.T) {
@@ -518,7 +579,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(-time.Hour)),
 		},
 	})
-	serverIntrospector.SetResultForToken(expiredJWT, &idptoken.DefaultIntrospectionResult{Active: false})
+	serverIntrospector.SetResultForToken(expiredJWT, &idptoken.DefaultIntrospectionResult{Active: false}, nil)
 
 	// Valid JWTs with scope
 	validJWT1Scope := []jwt.AccessPolicy{{
@@ -535,7 +596,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 	}
 	valid1JWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWT1RegClaims})
 	serverIntrospector.SetResultForToken(valid1JWT, &idptoken.DefaultIntrospectionResult{Active: true,
-		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWT1RegClaims, Scope: validJWT1Scope}})
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWT1RegClaims, Scope: validJWT1Scope}}, nil)
 	validJWT2Scope := []jwt.AccessPolicy{{
 		TenantUUID:        uuid.NewString(),
 		ResourceNamespace: "account-server",
@@ -550,7 +611,7 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 	}
 	valid2JWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWT2RegClaims})
 	serverIntrospector.SetResultForToken(valid2JWT, &idptoken.DefaultIntrospectionResult{Active: true,
-		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWT2RegClaims, Scope: validJWT2Scope}})
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWT2RegClaims, Scope: validJWT2Scope}}, nil)
 
 	// Opaque tokens
 	opaqueToken1 := "opaque-token-" + uuid.NewString()
@@ -578,13 +639,13 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 		Active:        true,
 		TokenType:     idputil.TokenTypeBearer,
 		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueToken1RegClaims, Scope: opaqueToken1Scope},
-	})
+	}, nil)
 	serverIntrospector.SetResultForToken(opaqueToken2, &idptoken.DefaultIntrospectionResult{
 		Active:        true,
 		TokenType:     idputil.TokenTypeBearer,
 		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: opaqueToken2RegClaims, Scope: opaqueToken2Scope},
-	})
-	serverIntrospector.SetResultForToken(opaqueToken3, &idptoken.DefaultIntrospectionResult{Active: false})
+	}, nil)
+	serverIntrospector.SetResultForToken(opaqueToken3, &idptoken.DefaultIntrospectionResult{Active: false}, nil)
 
 	tests := []struct {
 		name              string
