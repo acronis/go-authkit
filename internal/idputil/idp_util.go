@@ -36,6 +36,7 @@ func MakeDefaultHTTPClient(
 	reqTimeout time.Duration,
 	loggerProvider func(ctx context.Context) log.FieldLogger,
 	requestIDProvider func(ctx context.Context) string,
+	userAgent string,
 ) *http.Client {
 	if reqTimeout == 0 {
 		reqTimeout = DefaultHTTPRequestTimeout
@@ -46,7 +47,7 @@ func MakeDefaultHTTPClient(
 		LoggerProvider:   loggerProvider,
 	}
 	tr, _ = httpclient.NewRetryableRoundTripperWithOpts(tr, retryableOpts) // error is always nil
-	tr = httpclient.NewUserAgentRoundTripper(tr, libinfo.UserAgent())
+	tr = httpclient.NewUserAgentRoundTripper(tr, userAgent)
 	if requestIDProvider != nil {
 		tr = httpclient.NewRequestIDRoundTripperWithOpts(tr, httpclient.RequestIDRoundTripperOpts{
 			RequestIDProvider: requestIDProvider,
