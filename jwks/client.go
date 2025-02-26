@@ -1,5 +1,5 @@
 /*
-Copyright © 2024 Acronis International GmbH.
+Copyright © 2025 Acronis International GmbH.
 
 Released under MIT license.
 */
@@ -17,14 +17,13 @@ import (
 	"time"
 
 	"github.com/acronis/go-appkit/log"
-	"github.com/mendsley/gojwk"
 
 	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
 type jwksData struct {
-	Keys []*gojwk.Key `json:"keys"`
+	Keys []*JWK `json:"keys"`
 }
 
 // ClientOpts contains options for the JWKS client.
