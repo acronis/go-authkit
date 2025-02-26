@@ -473,20 +473,35 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	if err != nil {
 		return nil, fmt.Errorf("get introspection endpoint URL: %w", err)
 	}
-	return i.makeIntrospectFuncHTTP(introspectionEndpointURL), nil
+
+	introspect := i.makeIntrospectFuncHTTP(introspectionEndpointURL)
+	return func(ctx context.Context, token string) (IntrospectionResult, error) {
+		res, introspectErr := introspect(ctx, token)
+		if introspectErr != nil {
+			return nil, fmt.Errorf("do introspection via %s HTTP endpoint: %w", introspectionEndpointURL, introspectErr)
+		}
+		return res, nil
+	}, nil
 }
 
 func (i *Introspector) initStaticIntrospection(httpEndpoint string) {
 	if httpEndpoint != "" {
-		i.staticIntrospect = i.makeIntrospectFuncHTTP(httpEndpoint)
+		introspect := i.makeIntrospectFuncHTTP(httpEndpoint)
+		i.staticIntrospect = func(ctx context.Context, token string) (IntrospectionResult, error) {
+			res, introspectErr := introspect(ctx, token)
+			if introspectErr != nil {
+				return nil, fmt.Errorf("do introspection via static HTTP endpoint: %w", introspectErr)
+			}
+			return res, nil
+		}
 	}
 
 	if i.GRPCClient != nil {
 		fallback := i.staticIntrospect // gRPC has higher priority, HTTP endpoint will be used as fallback
-		i.staticIntrospect = func(ctx context.Context, token string) (IntrospectionResult, error) {
+		introspect := func(ctx context.Context, token string) (IntrospectionResult, error) {
 			accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
 			if err != nil {
-				return nil, fmt.Errorf("get access token for doing introspection: %w", err)
+				return nil, fmt.Errorf("get access token: %w", err)
 			}
 			res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
 			if err == nil || errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrPermissionDenied) || ctx.Err() != nil {
@@ -498,6 +513,13 @@ func (i *Introspector) initStaticIntrospection(httpEndpoint string) {
 			var fbErr error
 			if res, fbErr = fallback(ctx, token); fbErr != nil {
 				return nil, errors.Join(err, fbErr)
+			}
+			return res, nil
+		}
+		i.staticIntrospect = func(ctx context.Context, token string) (IntrospectionResult, error) {
+			res, introspectErr := introspect(ctx, token)
+			if introspectErr != nil {
+				return nil, fmt.Errorf("do introspection via static grpc endpoint: %w", introspectErr)
 			}
 			return res, nil
 		}
@@ -515,7 +537,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 	return func(ctx context.Context, token string) (IntrospectionResult, error) {
 		accessToken, err := i.accessTokenProvider.GetToken(ctx, i.accessTokenScope...)
 		if err != nil {
-			return nil, fmt.Errorf("get access token for doing introspection: %w", err)
+			return nil, fmt.Errorf("get access token: %w", err)
 		}
 		formEncoded := url.Values{"token": {token}}.Encode()
 		if i.scopeFilterFormURLEncoded != "" {
