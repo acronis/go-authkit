@@ -1,5 +1,5 @@
 /*
-Copyright © 2024 Acronis International GmbH.
+Copyright © 2025 Acronis International GmbH.
 
 Released under MIT license.
 */
@@ -11,9 +11,9 @@ import (
 	"encoding/json"
 
 	jwtgo "github.com/golang-jwt/jwt/v5"
-	"github.com/mendsley/gojwk"
 
 	"github.com/acronis/go-authkit/internal/idputil"
+	"github.com/acronis/go-authkit/internal/jwk"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -74,7 +74,7 @@ func MustMakeTokenString(claims jwt.Claims, kid string, rsaPrivateKey interface{
 
 // GetTestRSAPrivateKey returns pre-defined RSA private key for testing.
 func GetTestRSAPrivateKey() crypto.PrivateKey {
-	var privKey gojwk.Key
+	var privKey jwk.Key
 	_ = json.Unmarshal([]byte(TestPlainPrivateJWK), &privKey)
 	rsaPrivKey, _ := privKey.DecodePrivateKey()
 	return rsaPrivKey
