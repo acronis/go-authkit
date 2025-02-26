@@ -187,7 +187,7 @@ func main() {
 
 ## License
 
-Copyright © 2024 Acronis International GmbH.
+Copyright © 2025 Acronis International GmbH.
 
 Licensed under [MIT License](./LICENSE).
 
