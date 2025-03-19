@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"math/big"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -172,6 +173,10 @@ func TestDecodePrivateKeyFails(t *testing.T) {
 
 	privKey, err = key.DecodePrivateKey()
 	require.Error(t, err, "exported D is not a valid base64url")
-	require.ErrorContains(t, err, "public exponent too small")
+	if goVersion := runtime.Version(); goVersion >= "go1.24" {
+		require.ErrorContains(t, err, "input overflows the modulus")
+	} else {
+		require.ErrorContains(t, err, "public exponent too small")
+	}
 	require.Nil(t, privKey)
 }
