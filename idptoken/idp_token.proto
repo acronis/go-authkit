@@ -60,7 +60,7 @@ message AccessTokenScope {
 }
 
 message IntrospectTokenResponse {
-  reserved 14 to 100;
+  reserved 15 to 100;
   reserved 8, 9, 10;
   bool active = 1;
   string token_type = 2;
@@ -72,4 +72,5 @@ message IntrospectTokenResponse {
   repeated AccessTokenScope scope = 11;
   int64 nbf = 12;
   int64 iat = 13;
+  string custom_claims_json = 14; // JSON string containing custom claims
 }

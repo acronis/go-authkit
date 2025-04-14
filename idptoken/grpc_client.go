@@ -8,11 +8,13 @@ package idptoken
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
@@ -56,6 +58,11 @@ type GRPCClientOpts struct {
 	// PrometheusLibInstanceLabel is a label for Prometheus metrics.
 	// It allows distinguishing metrics from different instances of the same library.
 	PrometheusLibInstanceLabel string
+
+	// ResultTemplate is a custom introspection result
+	// that will be used instead of DefaultIntrospectionResult for unmarshalling introspection response.
+	// It must implement IntrospectionResult interface.
+	ResultTemplate IntrospectionResult
 }
 
 // GRPCClient is a client for the IDP token service that uses gRPC.
@@ -65,8 +72,8 @@ type GRPCClient struct {
 	reqTimeout        time.Duration
 	promMetrics       *metrics.PrometheusMetrics
 	requestIDProvider func(ctx context.Context) string
-
-	sessionID atomic.Value
+	resultTemplate    IntrospectionResult
+	sessionID         atomic.Value
 }
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
@@ -99,6 +106,7 @@ func NewGRPCClientWithOpts(
 		reqTimeout:        opts.RequestTimeout,
 		promMetrics:       metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceGRPCClient),
 		requestIDProvider: opts.RequestIDProvider,
+		resultTemplate:    opts.ResultTemplate,
 	}, nil
 }
 
@@ -158,26 +166,34 @@ func (c *GRPCClient) IntrospectToken(
 		c.setSessionID(sessionIDMeta[0])
 	}
 
-	claims := jwt.DefaultClaims{
-		RegisteredClaims: jwtgo.RegisteredClaims{
-			Issuer:   resp.GetIss(),
-			Subject:  resp.GetSub(),
-			Audience: resp.GetAud(),
-			ID:       resp.GetJti(),
-		},
+	result := c.resultTemplate
+	if result == nil {
+		result = &DefaultIntrospectionResult{}
 	}
+	result.SetIsActive(resp.GetActive())
+	if !result.IsActive() {
+		return result, nil
+	}
+
+	result.SetTokenType(resp.GetTokenType())
+
+	claims := result.GetClaims()
+	claims.SetIssuer(resp.GetIss())
+	claims.SetSubject(resp.GetSub())
+	claims.SetAudience(resp.GetAud())
+	claims.SetID(resp.GetJti())
 	if resp.GetExp() != 0 {
-		claims.ExpiresAt = jwtgo.NewNumericDate(time.Unix(resp.GetExp(), 0))
+		claims.SetExpirationTime(jwtgo.NewNumericDate(time.Unix(resp.GetExp(), 0)))
 	}
 	if resp.GetIat() != 0 {
-		claims.IssuedAt = jwtgo.NewNumericDate(time.Unix(resp.GetIat(), 0))
+		claims.SetIssuedAt(jwtgo.NewNumericDate(time.Unix(resp.GetIat(), 0)))
 	}
 	if resp.GetNbf() != 0 {
-		claims.NotBefore = jwtgo.NewNumericDate(time.Unix(resp.GetNbf(), 0))
+		claims.SetNotBefore(jwtgo.NewNumericDate(time.Unix(resp.GetNbf(), 0)))
 	}
-	claims.Scope = make([]jwt.AccessPolicy, len(resp.GetScope()))
+	scope := make([]jwt.AccessPolicy, len(resp.GetScope()))
 	for i, s := range resp.GetScope() {
-		claims.Scope[i] = jwt.AccessPolicy{
+		scope[i] = jwt.AccessPolicy{
 			ResourceNamespace: s.GetResourceNamespace(),
 			Role:              s.GetRoleName(),
 			ResourceServerID:  s.GetResourceServer(),
@@ -185,14 +201,18 @@ func (c *GRPCClient) IntrospectToken(
 			TenantUUID:        s.GetTenantUuid(),
 		}
 		if s.GetTenantIntId() != 0 {
-			claims.Scope[i].TenantID = strconv.FormatInt(s.GetTenantIntId(), 10)
+			scope[i].TenantID = strconv.FormatInt(s.GetTenantIntId(), 10)
 		}
 	}
-	return &DefaultIntrospectionResult{
-		Active:        resp.GetActive(),
-		TokenType:     resp.GetTokenType(),
-		DefaultClaims: claims,
-	}, nil
+	claims.SetScope(scope)
+
+	if customClaimsJSON := resp.GetCustomClaimsJson(); customClaimsJSON != "" {
+		if err := json.Unmarshal(stringToBytesUnsafe(customClaimsJSON), result); err != nil {
+			return nil, fmt.Errorf("unmarshal custom claims: %w", err)
+		}
+	}
+
+	return result, nil
 }
 
 func (c *GRPCClient) getSessionID() string {
@@ -302,4 +322,10 @@ func (sh *statsHandler) HandleConn(ctx context.Context, s stats.ConnStats) {
 	case *stats.ConnEnd:
 		idputil.GetLoggerFromProvider(ctx, sh.loggerProvider).Infof("grpc connection closed")
 	}
+}
+
+// stringToBytesUnsafe converts string to byte slice without memory allocation.
+func stringToBytesUnsafe(s string) []byte {
+	// nolint: gosec // memory optimization to prevent redundant slice copying
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

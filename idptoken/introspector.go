@@ -80,8 +80,10 @@ type TrustedIssNotFoundFallback func(ctx context.Context, i *Introspector, iss s
 // By default, DefaultIntrospectionResult is used.
 type IntrospectionResult interface {
 	IsActive() bool
+	SetIsActive(active bool)
 	GetTokenType() string
-	GetClaims() jwt.Claims
+	SetTokenType(tokenType string)
+	GetClaims() jwt.MutableClaims
 	Clone() IntrospectionResult
 }
 
@@ -232,13 +234,23 @@ func (ir *DefaultIntrospectionResult) IsActive() bool {
 	return ir.Active
 }
 
+// SetIsActive sets the token as active or inactive.
+func (ir *DefaultIntrospectionResult) SetIsActive(active bool) {
+	ir.Active = active
+}
+
 // GetTokenType returns the token type.
 func (ir *DefaultIntrospectionResult) GetTokenType() string {
 	return ir.TokenType
 }
 
+// SetTokenType sets the token type.
+func (ir *DefaultIntrospectionResult) SetTokenType(tokenType string) {
+	ir.TokenType = tokenType
+}
+
 // GetClaims returns the claims of the token.
-func (ir *DefaultIntrospectionResult) GetClaims() jwt.Claims {
+func (ir *DefaultIntrospectionResult) GetClaims() jwt.MutableClaims {
 	return &ir.DefaultClaims
 }
 
@@ -288,18 +300,10 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		opts.EndpointDiscoveryCache.TTL = DefaultIntrospectionEndpointDiscoveryCacheTTL
 	}
 
-	var resultTemplate IntrospectionResult = &DefaultIntrospectionResult{}
-	if opts.ResultTemplate != nil {
-		if opts.GRPCClient != nil {
-			return nil, errors.New("custom introspection result template is not supported when gRPC is used")
-		}
-		resultTemplate = opts.ResultTemplate
-	}
-
 	introspector := &Introspector{
 		accessTokenProvider:           accessTokenProvider,
 		accessTokenScope:              opts.AccessTokenScope,
-		resultTemplate:                resultTemplate,
+		resultTemplate:                opts.ResultTemplate,
 		jwtParser:                     jwtgo.NewParser(),
 		loggerProvider:                opts.LoggerProvider,
 		GRPCClient:                    opts.GRPCClient,
@@ -577,7 +581,12 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 			return nil, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
 		}
 
-		res := i.resultTemplate.Clone()
+		var res IntrospectionResult
+		if i.resultTemplate != nil {
+			res = i.resultTemplate.Clone()
+		} else {
+			res = &DefaultIntrospectionResult{}
+		}
 		if err = json.NewDecoder(resp.Body).Decode(res); err != nil {
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorDecodeBody)

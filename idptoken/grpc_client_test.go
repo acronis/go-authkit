@@ -236,6 +236,81 @@ func TestGRPCClient_IntrospectToken(t *gotesting.T) {
 	}
 }
 
+func TestGRPCClient_IntrospectToken_CustomClaims(t *gotesting.T) {
+	const validAccessToken = "access-token-with-introspection-permission"
+
+	opaqueToken := "opaque-token-" + uuid.NewString()
+	opaqueTokenScope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "admin",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	opaqueTokenRegClaims := jwtgo.RegisteredClaims{
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+
+	// Create a custom claims JSON string
+	customClaimsJSON := `{"custom_string_field":"custom_value","custom_int_field":42}`
+
+	jwtScopeToGRPC := func(jwtScope []jwt.AccessPolicy) []*pb.AccessTokenScope {
+		grpcScope := make([]*pb.AccessTokenScope, len(jwtScope))
+		for i, scope := range jwtScope {
+			grpcScope[i] = &pb.AccessTokenScope{
+				TenantUuid:        scope.TenantUUID,
+				ResourceNamespace: scope.ResourceNamespace,
+				RoleName:          scope.Role,
+				ResourcePath:      scope.ResourcePath,
+			}
+		}
+		return grpcScope
+	}
+
+	grpcServerTokenIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+	grpcServerTokenIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+	grpcServerTokenIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
+		Active:           true,
+		TokenType:        idputil.TokenTypeBearer,
+		Aud:              opaqueTokenRegClaims.Audience,
+		Exp:              opaqueTokenRegClaims.ExpiresAt.Unix(),
+		Scope:            jwtScopeToGRPC(opaqueTokenScope),
+		CustomClaimsJson: customClaimsJSON,
+	}, nil)
+
+	grpcIDPSrv := idptest.NewGRPCServer(idptest.WithGRPCTokenIntrospector(grpcServerTokenIntrospector))
+	require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
+	defer func() { grpcIDPSrv.GracefulStop() }()
+
+	grpcClient, err := idptoken.NewGRPCClientWithOpts(
+		grpcIDPSrv.Addr(),
+		insecure.NewCredentials(),
+		idptoken.GRPCClientOpts{
+			ResultTemplate: &CustomIntrospectionResult{},
+		},
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, grpcClient.Close()) }()
+
+	// Test with custom result template
+	result, err := grpcClient.IntrospectToken(context.Background(), opaqueToken, nil, validAccessToken)
+	require.NoError(t, err)
+	require.True(t, result.IsActive())
+	require.Equal(t, idputil.TokenTypeBearer, result.GetTokenType())
+
+	// Check that custom fields were properly unmarshalled
+	customResult, ok := result.(*CustomIntrospectionResult)
+	require.True(t, ok, "Result should be of type CustomIntrospectionResult")
+	require.Equal(t, "custom_value", customResult.CustomStringField)
+	require.Equal(t, 42, customResult.CustomIntField)
+
+	// Test cloning with custom fields
+	clonedResult := result.Clone()
+	clonedCustomResult, ok := clonedResult.(*CustomIntrospectionResult)
+	require.True(t, ok, "Cloned result should be of type CustomIntrospectionResult")
+	require.Equal(t, "custom_value", clonedCustomResult.CustomStringField)
+	require.Equal(t, 42, clonedCustomResult.CustomIntField)
+}
+
 func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	tokenExpiresIn := time.Hour
 	tokenExpiresAt := time.Now().Add(time.Hour)

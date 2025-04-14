@@ -1,5 +1,5 @@
 /*
-Copyright © 2024 Acronis International GmbH.
+Copyright © 2025 Acronis International GmbH.
 
 Released under MIT license.
 */
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	jwtgo "github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/acronis/go-authkit/jwt"
@@ -165,6 +166,78 @@ func TestDefaultClaims_Clone(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMutableClaims(t *testing.T) {
+	testID := uuid.NewString()
+	testScope := jwt.Scope{
+		{
+			TenantUUID:        uuid.NewString(),
+			ResourceNamespace: "account-server",
+			Role:              "admin",
+		},
+	}
+	testExp := jwtgo.NewNumericDate(time.Now().Add(time.Hour))
+	testIat := jwtgo.NewNumericDate(time.Now())
+	testNbf := jwtgo.NewNumericDate(time.Now().Add(-time.Minute))
+	testIssuer := "https://iss.example.com"
+	testSub := uuid.NewString()
+	testAud := jwtgo.ClaimStrings{"https://aud.example.com"}
+
+	t.Run("DefaultClaims", func(t *testing.T) {
+		claims := &jwt.DefaultClaims{}
+		mutableClaims := jwt.MutableClaims(claims)
+
+		// Test setter methods
+		mutableClaims.SetID(testID)
+		mutableClaims.SetScope(testScope)
+		mutableClaims.SetExpirationTime(testExp)
+		mutableClaims.SetIssuedAt(testIat)
+		mutableClaims.SetNotBefore(testNbf)
+		mutableClaims.SetIssuer(testIssuer)
+		mutableClaims.SetSubject(testSub)
+		mutableClaims.SetAudience(testAud)
+
+		// Verify values were set correctly
+		require.Equal(t, testID, claims.GetID())
+		require.Equal(t, testScope, claims.GetScope())
+		require.Equal(t, testExp, claims.ExpiresAt)
+		require.Equal(t, testIat, claims.IssuedAt)
+		require.Equal(t, testNbf, claims.NotBefore)
+		require.Equal(t, testIssuer, claims.Issuer)
+		require.Equal(t, testSub, claims.Subject)
+		require.Equal(t, testAud, claims.Audience)
+	})
+
+	t.Run("CustomClaims", func(t *testing.T) {
+		claims := &CustomClaims{
+			CustomField: "original",
+		}
+		mutableClaims := jwt.MutableClaims(claims)
+
+		// Test setter methods
+		mutableClaims.SetID(testID)
+		mutableClaims.SetScope(testScope)
+		mutableClaims.SetExpirationTime(testExp)
+		mutableClaims.SetIssuedAt(testIat)
+		mutableClaims.SetNotBefore(testNbf)
+		mutableClaims.SetIssuer(testIssuer)
+		mutableClaims.SetSubject(testSub)
+		mutableClaims.SetAudience(testAud)
+
+		// Verify standard values were set correctly
+		require.Equal(t, testID, claims.GetID())
+		require.Equal(t, testScope, claims.GetScope())
+		require.Equal(t, testExp, claims.ExpiresAt)
+		require.Equal(t, testIat, claims.IssuedAt)
+		require.Equal(t, testNbf, claims.NotBefore)
+		require.Equal(t, testIssuer, claims.Issuer)
+		require.Equal(t, testSub, claims.Subject)
+		require.Equal(t, testAud, claims.Audience)
+
+		// Verify custom fields remain intact
+		require.Equal(t, "original", claims.CustomField)
+	})
 }
 
 type CustomClaims struct {
