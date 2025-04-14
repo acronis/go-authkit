@@ -211,6 +211,7 @@ func NewTokenIntrospector(
 			LoggerProvider:    options.loggerProvider,
 			RequestIDProvider: options.requestIDProvider,
 			UserAgent:         options.userAgent,
+			ResultTemplate:    options.resultTemplate,
 		}
 		if grpcClient, err = idptoken.NewGRPCClientWithOpts(
 			cfg.Introspection.GRPC.Endpoint, transportCreds, grpcClientOpts,

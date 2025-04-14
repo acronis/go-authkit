@@ -122,13 +122,13 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
 	}
 	validCustomJWT := idptest.MustMakeTokenStringSignedWithTestKey(&CustomClaims{
-		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims}, CustomField: customFieldVal})
+		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims}, CustomStringField: customFieldVal})
 	httpServerIntrospector.SetResultForToken(validCustomJWT, &CustomIntrospectionResult{
 		Active:    true,
 		TokenType: idputil.TokenTypeBearer,
 		CustomClaims: CustomClaims{
-			DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims, Scope: validCustomJWTScope},
-			CustomField:   customFieldVal,
+			DefaultClaims:     jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims, Scope: validCustomJWTScope},
+			CustomStringField: customFieldVal,
 		},
 	}, nil)
 
@@ -169,6 +169,47 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	opaqueTokenWithInternalErr := "opaque-token-with-internal-err"
 	grpcServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, grpcInternalErr)
 	httpServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, fmt.Errorf("internal error"))
+
+	// Add a test for gRPC introspection with custom claims
+	customClaimsJSON := `{"custom_string_field":"custom_value","custom_int_field":42}`
+	invalidCustomClaimsJSON := `{"custom_string_field":"value","invalidJSON`
+
+	opaqueTokenWithCustomClaims := "opaque-token-with-custom-claims-" + uuid.NewString()
+	opaqueTokenWithCustomClaimsScope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "admin",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	opaqueTokenWithCustomClaimsRegClaims := jwtgo.RegisteredClaims{
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	grpcServerIntrospector.SetResultForToken(opaqueTokenWithCustomClaims, &pb.IntrospectTokenResponse{
+		Active:           true,
+		TokenType:        idputil.TokenTypeBearer,
+		Aud:              opaqueTokenWithCustomClaimsRegClaims.Audience,
+		Exp:              opaqueTokenWithCustomClaimsRegClaims.ExpiresAt.Unix(),
+		Scope:            jwtScopeToGRPC(opaqueTokenWithCustomClaimsScope),
+		CustomClaimsJson: customClaimsJSON,
+	}, nil)
+
+	// Token with invalid JSON in custom claims
+	opaqueTokenWithInvalidCustomClaims := "opaque-token-with-invalid-custom-claims-" + uuid.NewString()
+	grpcServerIntrospector.SetResultForToken(opaqueTokenWithInvalidCustomClaims, &pb.IntrospectTokenResponse{
+		Active:           true,
+		TokenType:        idputil.TokenTypeBearer,
+		Aud:              opaqueTokenWithCustomClaimsRegClaims.Audience,
+		Exp:              opaqueTokenWithCustomClaimsRegClaims.ExpiresAt.Unix(),
+		Scope:            jwtScopeToGRPC(opaqueTokenWithCustomClaimsScope),
+		CustomClaimsJson: invalidCustomClaimsJSON,
+	}, nil)
+
+	// Inactive token with custom claims (should not attempt to unmarshal)
+	opaqueTokenInactiveWithCustomClaims := "opaque-token-inactive-with-custom-claims-" + uuid.NewString()
+	grpcServerIntrospector.SetResultForToken(opaqueTokenInactiveWithCustomClaims, &pb.IntrospectTokenResponse{
+		Active:           false,
+		CustomClaimsJson: customClaimsJSON, // This should be ignored since token is inactive
+	}, nil)
 
 	tests := []struct {
 		name                    string
@@ -310,8 +351,8 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 				Active:    true,
 				TokenType: idputil.TokenTypeBearer,
 				CustomClaims: CustomClaims{
-					DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims, Scope: jwt.Scope{validCustomJWTScope[1]}},
-					CustomField:   customFieldVal,
+					DefaultClaims:     jwt.DefaultClaims{RegisteredClaims: validCustomJWTRegClaims, Scope: jwt.Scope{validCustomJWTScope[1]}},
+					CustomStringField: customFieldVal,
 				},
 			},
 			expectedHTTPSrvCalled: true,
@@ -512,12 +553,70 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			expectedGRPCSrvCalled: true,
 			expectedHTTPSrvCalled: true,
 		},
+		{
+			name:              "ok, grpc introspection with custom claims, default introspection result",
+			useGRPCClient:     true,
+			tokenToIntrospect: opaqueTokenWithCustomClaims,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:    true,
+				TokenType: idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{
+					RegisteredClaims: opaqueTokenWithCustomClaimsRegClaims,
+					Scope:            opaqueTokenWithCustomClaimsScope,
+				},
+			},
+			expectedGRPCSrvCalled: true,
+		},
+		{
+			name:              "ok, grpc introspection with custom claims, custom result template",
+			useGRPCClient:     true,
+			introspectorOpts:  idptoken.IntrospectorOpts{ResultTemplate: &CustomIntrospectionResult{}},
+			tokenToIntrospect: opaqueTokenWithCustomClaims,
+			expectedResult: &CustomIntrospectionResult{
+				Active:    true,
+				TokenType: idputil.TokenTypeBearer,
+				CustomClaims: CustomClaims{
+					DefaultClaims: jwt.DefaultClaims{
+						RegisteredClaims: opaqueTokenWithCustomClaimsRegClaims,
+						Scope:            opaqueTokenWithCustomClaimsScope,
+					},
+					CustomStringField: "custom_value",
+					CustomIntField:    42,
+				},
+			},
+			expectedGRPCSrvCalled: true,
+		},
+		{
+			name:          "error, grpc introspection with invalid custom claims JSON",
+			useGRPCClient: true,
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ResultTemplate: &CustomIntrospectionResult{},
+			},
+			tokenToIntrospect: opaqueTokenWithInvalidCustomClaims,
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorContains(t, err, "unmarshal custom claims")
+			},
+			expectedGRPCSrvCalled: true,
+		},
+		{
+			name:                  "ok, grpc introspection with inactive token and custom claims",
+			useGRPCClient:         true,
+			introspectorOpts:      idptoken.IntrospectorOpts{ResultTemplate: &CustomIntrospectionResult{}},
+			tokenToIntrospect:     opaqueTokenInactiveWithCustomClaims,
+			expectedResult:        &CustomIntrospectionResult{Active: false},
+			expectedGRPCSrvCalled: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *gotesting.T) {
 			if tt.useGRPCClient {
 				// gRPC client is created and used by condition to avoid preserving its state (sessionID) between tests
-				grpcClient, err := idptoken.NewGRPCClient(grpcIDPSrv.Addr(), insecure.NewCredentials())
+				var grpcClient *idptoken.GRPCClient
+				var err error
+
+				grpcClient, err = idptoken.NewGRPCClientWithOpts(grpcIDPSrv.Addr(), insecure.NewCredentials(),
+					idptoken.GRPCClientOpts{ResultTemplate: tt.introspectorOpts.ResultTemplate})
+
 				require.NoError(t, err)
 				defer func() { require.NoError(t, grpcClient.Close()) }()
 				tt.introspectorOpts.GRPCClient = grpcClient
@@ -843,13 +942,15 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 
 type CustomClaims struct {
 	jwt.DefaultClaims
-	CustomField string `json:"custom_field"`
+	CustomStringField string `json:"custom_string_field"`
+	CustomIntField    int    `json:"custom_int_field"`
 }
 
 func (c *CustomClaims) Clone() jwt.Claims {
 	return &CustomClaims{
-		DefaultClaims: *c.DefaultClaims.Clone().(*jwt.DefaultClaims),
-		CustomField:   c.CustomField,
+		DefaultClaims:     *c.DefaultClaims.Clone().(*jwt.DefaultClaims),
+		CustomStringField: c.CustomStringField,
+		CustomIntField:    c.CustomIntField,
 	}
 }
 
@@ -863,11 +964,19 @@ func (ir *CustomIntrospectionResult) IsActive() bool {
 	return ir.Active
 }
 
+func (ir *CustomIntrospectionResult) SetIsActive(active bool) {
+	ir.Active = active
+}
+
 func (ir *CustomIntrospectionResult) GetTokenType() string {
 	return ir.TokenType
 }
 
-func (ir *CustomIntrospectionResult) GetClaims() jwt.Claims {
+func (ir *CustomIntrospectionResult) SetTokenType(tokenType string) {
+	ir.TokenType = tokenType
+}
+
+func (ir *CustomIntrospectionResult) GetClaims() jwt.MutableClaims {
 	return &ir.CustomClaims
 }
 

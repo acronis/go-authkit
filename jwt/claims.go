@@ -29,6 +29,36 @@ type Claims interface {
 	ApplyScopeFilter(filter ScopeFilter)
 }
 
+// MutableClaims is an interface that extends Claims with methods for modifying the claims.
+// It is used for creating new claims with modified values.
+type MutableClaims interface {
+	Claims
+
+	// SetID sets the JTI field of the claims.
+	SetID(jti string)
+
+	// SetScope sets the scope of the claims.
+	SetScope(scope Scope)
+
+	// SetExpirationTime sets the expiration time of the claims.
+	SetExpirationTime(exp *jwtgo.NumericDate)
+
+	// SetIssuedAt sets the issued at time of the claims.
+	SetIssuedAt(iat *jwtgo.NumericDate)
+
+	// SetNotBefore sets the not before time of the claims.
+	SetNotBefore(nbf *jwtgo.NumericDate)
+
+	// SetIssuer sets the issuer of the claims.
+	SetIssuer(iss string)
+
+	// SetSubject sets the subject of the claims.
+	SetSubject(sub string)
+
+	// SetAudience sets the audience of the claims.
+	SetAudience(aud jwtgo.ClaimStrings)
+}
+
 // DefaultClaims is a struct that extends jwt.RegisteredClaims with a custom scope field.
 // It may be embedded into custom claims structs if additional fields are required.
 type DefaultClaims struct {
@@ -41,9 +71,49 @@ func (c *DefaultClaims) GetID() string {
 	return c.ID
 }
 
+// SetID sets the JTI field of the DefaultClaims.
+func (c *DefaultClaims) SetID(jti string) {
+	c.ID = jti
+}
+
 // GetScope returns the scope of the DefaultClaims as a slice of access policies.
 func (c *DefaultClaims) GetScope() Scope {
 	return c.Scope
+}
+
+// SetScope sets the scope of the DefaultClaims.
+func (c *DefaultClaims) SetScope(scope Scope) {
+	c.Scope = scope
+}
+
+// SetExpirationTime sets the expiration time of the DefaultClaims.
+func (c *DefaultClaims) SetExpirationTime(exp *jwtgo.NumericDate) {
+	c.ExpiresAt = exp
+}
+
+// SetIssuedAt sets the issued at time of the DefaultClaims.
+func (c *DefaultClaims) SetIssuedAt(iat *jwtgo.NumericDate) {
+	c.IssuedAt = iat
+}
+
+// SetNotBefore sets the not before time of the DefaultClaims.
+func (c *DefaultClaims) SetNotBefore(nbf *jwtgo.NumericDate) {
+	c.NotBefore = nbf
+}
+
+// SetIssuer sets the issuer of the DefaultClaims.
+func (c *DefaultClaims) SetIssuer(iss string) {
+	c.Issuer = iss
+}
+
+// SetSubject sets the subject of the DefaultClaims.
+func (c *DefaultClaims) SetSubject(sub string) {
+	c.Subject = sub
+}
+
+// SetAudience sets the audience of the DefaultClaims.
+func (c *DefaultClaims) SetAudience(aud jwtgo.ClaimStrings) {
+	c.Audience = aud
 }
 
 // Clone returns a deep copy of the DefaultClaims.
