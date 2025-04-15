@@ -16,6 +16,7 @@ go get -u github.com/acronis/go-authkit
 - Introspect Access Tokens via OAuth 2.0 Token Introspection endpoint.
 - Fetch and cache Access Tokens from Identity Providers (IDP).
 - Provides primitives for testing authentication and authorization in HTTP services.
+- Extensions system for vendor-specific implementations (see [extensions](./extensions) directory), including Acronis-specific JWT claims.
 
 ## Authenticate HTTP requests with JWT tokens
 
@@ -184,6 +185,15 @@ func main() {
 	// ...
 }
 ```
+
+## Extensions
+
+go-authkit provides an extensions system for vendor-specific implementations in the [extensions](./extensions) directory. 
+
+Currently available extensions:
+- **acronisext**: Standardized Acronis-specific JWT claims and token introspection structures to ensure consistency across services.
+
+See [extensions/README.md](./extensions/readme.md) for more details about the extensions system.
 
 ## License
 
