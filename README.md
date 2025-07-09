@@ -17,6 +17,7 @@ go get -u github.com/acronis/go-authkit
 - Fetch and cache Access Tokens from Identity Providers (IDP).
 - Provides primitives for testing authentication and authorization in HTTP services.
 - Extensions system for vendor-specific implementations (see [extensions](./extensions) directory), including Acronis-specific JWT claims.
+- Pluggable JWT scope decoder architecture for custom scope parsing implementations.
 
 ## Authenticate HTTP requests with JWT tokens
 
@@ -88,6 +89,29 @@ type AccessPolicy struct {
 	// Role determines what actions are allowed to be performed on the specified tenant or resource.
 	Role string `json:"role,omitempty"`
 }
+```
+
+### Custom Scope Decoders
+
+The library supports pluggable JWT scope decoders for custom scope parsing implementations. Use `RegisterScopeDecoder()` to register a custom decoder:
+
+```go
+import "github.com/acronis/go-authkit/jwt"
+
+// Register a custom scope decoder
+jwt.RegisterScopeDecoder(func(rawScope json.RawMessage) (jwt.Scope, error) {
+	// Custom scope parsing logic
+	return customScope, nil
+})
+```
+
+For Acronis-specific scope formats, use the provided decoder from the extensions package:
+
+```go
+import "github.com/acronis/go-authkit/extensions/acronisext"
+
+// Register Acronis scope decoder
+acronisext.RegisterScopeDecoder()
 ```
 
 `JWTAuthMiddleware()` function accepts two mandatory arguments: `errorDomain` and `JWTParser`.

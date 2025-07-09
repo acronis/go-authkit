@@ -8,9 +8,6 @@ package jwt
 
 import jwtgo "github.com/golang-jwt/jwt/v5"
 
-// Scope is a slice of access policies.
-type Scope []AccessPolicy
-
 // Claims is an interface that extends jwt.Claims from the "github.com/golang-jwt/jwt/v5"
 // with additional methods for working with access policies.
 type Claims interface {
@@ -173,30 +170,4 @@ func (c *DefaultClaims) ApplyScopeFilter(filter ScopeFilter) {
 		}
 	}
 	c.Scope = c.Scope[:n]
-}
-
-// AccessPolicy represents a single access policy which specifies access rights to a tenant or resource
-// in the scope of a resource server.
-type AccessPolicy struct {
-	// TenantID is a unique identifier of tenant for which access is granted (if resource is not specified)
-	// or which the resource is owned by (if resource is specified).
-	TenantID string `json:"tid,omitempty"`
-
-	// TenantUUID is a UUID of tenant for which access is granted (if the resource is not specified)
-	// or which the resource is owned by (if the resource is specified).
-	TenantUUID string `json:"tuid,omitempty"`
-
-	// ResourceServerID is a unique resource server instance or cluster ID.
-	ResourceServerID string `json:"rs,omitempty"`
-
-	// ResourceNamespace is a namespace to which resource belongs within resource server.
-	// E.g.: account-server, storage-manager, task-manager, alert-manager, etc.
-	ResourceNamespace string `json:"rn,omitempty"`
-
-	// ResourcePath is a unique identifier of or path to a single resource or resource collection
-	// in the scope of the resource server and namespace.
-	ResourcePath string `json:"rp,omitempty"`
-
-	// Role determines what actions are allowed to be performed on the specified tenant or resource.
-	Role string `json:"role,omitempty"`
 }
