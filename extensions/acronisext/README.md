@@ -4,6 +4,7 @@ This package provides Acronis-specific extensions for the go-authkit library, in
 
 1. Custom JWT claims that extend the standard `jwt.DefaultClaims`
 2. Token introspection result structure for Acronis-specific claims
+3. JWT scope decoder for parsing Acronis-specific scope formats
 
 ## Purpose
 
@@ -67,6 +68,10 @@ type TokenIntrospectionResult struct {
 }
 ```
 
+## JWT Scope Decoder
+
+The package provides a custom scope decoder that handles Acronis-specific scope formats. The decoder must be explicitly registered to enable enhanced scope parsing capabilities.
+
 ## Usage Guidelines
 
 1. When creating JWT tokens with Acronis-specific claims, use the `JWTClaims` struct:
@@ -107,3 +112,11 @@ type TokenIntrospectionResult struct {
     introspector, err := auth.NewTokenIntrospector(cfg, tokenProvider, scopeFilter,
         authkit.WithTokenIntrospectorResultTemplate(&acronisext.TokenIntrospectionResult{}))
     ```
+
+4. To enable Acronis-specific scope parsing, register the scope decoder:
+   ```go
+   import "github.com/acronis/go-authkit/extensions/acronisext"
+   
+   // Register the Acronis scope decoder
+   acronisext.RegisterScopeDecoder()
+   ```

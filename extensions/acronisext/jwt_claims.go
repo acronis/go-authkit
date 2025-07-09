@@ -7,6 +7,12 @@ Released under MIT license.
 package acronisext
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -48,6 +54,17 @@ type JWTClaims struct {
 
 var _ jwt.Claims = (*JWTClaims)(nil)
 
+var registerOnce sync.Once
+
+// RegisterScopeDecoder registers the Acronis scope decoder for JWT claims parsing.
+// This function is idempotent and safe to call multiple times concurrently.
+// Call this function to enable Acronis-specific scope format support.
+func RegisterScopeDecoder() {
+	registerOnce.Do(func() {
+		jwt.RegisterScopeDecoder(ScopeDecoder)
+	})
+}
+
 // Clone returns a deep copy of the JWTClaims.
 func (c *JWTClaims) Clone() jwt.Claims {
 	defaultClaims := c.DefaultClaims.Clone().(*jwt.DefaultClaims)
@@ -75,4 +92,108 @@ func (c *JWTClaims) Clone() jwt.Claims {
 	}
 
 	return newClaims
+}
+
+// ScopeDecoder is a custom decoder that handles Acronis URN format scopes.
+// It supports both array of URN strings and single space-delimited URN string formats.
+func ScopeDecoder(raw json.RawMessage) (jwt.Scope, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("acronis scope decoder: empty JSON")
+	}
+	switch raw[0] {
+	case '[': // array of strings
+		var policyStrs []string
+		if err := json.Unmarshal(raw, &policyStrs); err != nil {
+			return nil, err
+		}
+		scope := make(jwt.Scope, 0, len(policyStrs))
+		for _, policyStr := range policyStrs {
+			policy, err := ParseAccessPolicyURN(policyStr)
+			if err != nil {
+				return nil, err
+			}
+			scope = append(scope, policy)
+		}
+		return scope, nil
+
+	case '"': // single space-delimited string
+		var str string
+		if err := json.Unmarshal(raw, &str); err != nil {
+			return nil, err
+		}
+		policyStrs := strings.Fields(str)
+		scope := make(jwt.Scope, 0, len(policyStrs))
+		for _, policyStr := range policyStrs {
+			policy, err := ParseAccessPolicyURN(policyStr)
+			if err != nil {
+				return nil, err
+			}
+			scope = append(scope, policy)
+		}
+		return scope, nil
+
+	default:
+		return nil, errors.New("acronis scope decoder: unsupported JSON")
+	}
+}
+
+const accessPolicyURNPrefix = "urn:acronis:"
+
+// ParseAccessPolicyURN parses an Acronis URN string into an AccessPolicy struct.
+// Expected format: urn:acronis:resource_server:resource_namespace:resource:role
+// where resource is a tenant ID and optionally a resource path, separated by '|'.
+//
+// EXPERIMENTAL: This function is experimental and the format of the Acronis URN
+// may be changed in the future. Use with caution in production code.
+func ParseAccessPolicyURN(s string) (jwt.AccessPolicy, error) {
+	if !strings.HasPrefix(s, accessPolicyURNPrefix) {
+		return jwt.AccessPolicy{}, errors.New("not an acronis URN")
+	}
+	s = s[len(accessPolicyURNPrefix):]
+
+	resourceServerIdx := strings.IndexByte(s, ':')
+	if resourceServerIdx < 0 {
+		return jwt.AccessPolicy{}, errors.New("invalid URN format, missing resource server")
+	}
+	resourceServer := s[:resourceServerIdx]
+	s = s[resourceServerIdx+1:]
+
+	resourceNamespaceIdx := strings.IndexByte(s, ':')
+	if resourceNamespaceIdx < 0 {
+		return jwt.AccessPolicy{}, errors.New("invalid URN format, missing resource namespace")
+	}
+	resourceNamespace := s[:resourceNamespaceIdx]
+	s = s[resourceNamespaceIdx+1:]
+
+	resourceIdx := strings.IndexByte(s, ':')
+	if resourceIdx < 0 {
+		return jwt.AccessPolicy{}, errors.New("invalid URN format, missing resource")
+	}
+	resource := s[:resourceIdx]
+	s = s[resourceIdx+1:]
+
+	tenantID := resource
+	var resourcePath string
+	if resourcePathIdx := strings.IndexByte(resource, '|'); resourcePathIdx >= 0 {
+		tenantID = resource[:resourcePathIdx]
+		resourcePath = resource[resourcePathIdx+1:]
+	}
+
+	role := s
+	if role == "" {
+		return jwt.AccessPolicy{}, errors.New("invalid URN format, missing role")
+	}
+
+	// Check for extra colons that would indicate unexpected trailing data
+	if strings.Contains(role, ":") {
+		return jwt.AccessPolicy{}, fmt.Errorf("invalid URN format, unexpected trailing data: %q", role)
+	}
+
+	return jwt.AccessPolicy{
+		TenantUUID:        tenantID,
+		ResourceServerID:  resourceServer,
+		ResourceNamespace: resourceNamespace,
+		ResourcePath:      resourcePath,
+		Role:              role,
+	}, nil
 }

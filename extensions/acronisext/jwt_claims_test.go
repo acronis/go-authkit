@@ -8,6 +8,7 @@ package acronisext
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,4 +92,261 @@ func TestJWTClaims(t *testing.T) {
 	claims.Narrowing[0][0] = "changed"
 	assert.NotEqual(t, claims.UserID, clonedClaims.UserID)
 	assert.NotEqual(t, claims.Narrowing[0][0], clonedClaims.Narrowing[0][0])
+}
+
+func TestScopeDecoder(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expected    jwt.Scope
+		expectError bool
+	}{
+		{
+			name:  "array of URN strings",
+			input: `["urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin"]`,
+			expected: jwt.Scope{
+				{
+					TenantUUID:        "11111111-1111-1111-1111-111111111111",
+					ResourceServerID:  "identity",
+					ResourceNamespace: "tenant",
+					Role:              "admin",
+				},
+			},
+		},
+		{
+			name:  "single space-delimited string",
+			input: `"urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin urn:acronis:backup:tenant:22222222-2222-2222-2222-222222222222:backup_admin"`,
+			expected: jwt.Scope{
+				{
+					TenantUUID:        "11111111-1111-1111-1111-111111111111",
+					ResourceServerID:  "identity",
+					ResourceNamespace: "tenant",
+					Role:              "admin",
+				},
+				{
+					TenantUUID:        "22222222-2222-2222-2222-222222222222",
+					ResourceServerID:  "backup",
+					ResourceNamespace: "tenant",
+					Role:              "backup_admin",
+				},
+			},
+		},
+		{
+			name:  "URN with resource path",
+			input: `["urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111|/resource/path:admin"]`,
+			expected: jwt.Scope{
+				{
+					TenantUUID:        "11111111-1111-1111-1111-111111111111",
+					ResourceServerID:  "identity",
+					ResourceNamespace: "tenant",
+					ResourcePath:      "/resource/path",
+					Role:              "admin",
+				},
+			},
+		},
+		{
+			name:        "empty JSON",
+			input:       ``,
+			expectError: true,
+		},
+		{
+			name:        "invalid JSON type",
+			input:       `123`,
+			expectError: true,
+		},
+		{
+			name:        "malformed JSON",
+			input:       `[invalid`,
+			expectError: true,
+		},
+		{
+			name:        "invalid URN in array",
+			input:       `["invalid:urn:format"]`,
+			expectError: true,
+		},
+		{
+			name:        "invalid URN in string",
+			input:       `"invalid:urn:format"`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ScopeDecoder(json.RawMessage(tt.input))
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestParseAccessPolicyURN(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expected    jwt.AccessPolicy
+		expectError bool
+	}{
+		{
+			name:  "valid URN",
+			input: "urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin",
+			expected: jwt.AccessPolicy{
+				TenantUUID:        "11111111-1111-1111-1111-111111111111",
+				ResourceServerID:  "identity",
+				ResourceNamespace: "tenant",
+				Role:              "admin",
+			},
+		},
+		{
+			name:  "URN with resource path",
+			input: "urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111|/resource/path:admin",
+			expected: jwt.AccessPolicy{
+				TenantUUID:        "11111111-1111-1111-1111-111111111111",
+				ResourceServerID:  "identity",
+				ResourceNamespace: "tenant",
+				ResourcePath:      "/resource/path",
+				Role:              "admin",
+			},
+		},
+		{
+			name:        "not an Acronis URN",
+			input:       "urn:other:identity:tenant:11111111-1111-1111-1111-111111111111:admin",
+			expectError: true,
+		},
+		{
+			name:        "missing resource server",
+			input:       "urn:acronis:",
+			expectError: true,
+		},
+		{
+			name:        "missing resource namespace",
+			input:       "urn:acronis:identity",
+			expectError: true,
+		},
+		{
+			name:        "missing tenant ID",
+			input:       "urn:acronis:identity:tenant",
+			expectError: true,
+		},
+		{
+			name:        "missing role",
+			input:       "urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111",
+			expectError: true,
+		},
+		{
+			name:        "trailing data",
+			input:       "urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin:extra",
+			expectError: true,
+		},
+		{
+			name:        "empty string",
+			input:       "",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseAccessPolicyURN(tt.input)
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestScopeUnmarshalJSON(t *testing.T) {
+	// Register the scope decoder for this test
+	RegisterScopeDecoder()
+
+	tests := []struct {
+		name        string
+		input       string
+		expected    jwt.Scope
+		expectError bool
+	}{
+		{
+			name:  "standard JSON array",
+			input: `[{"tid":"tenant1","rs":"server1","rn":"namespace1","role":"admin"}]`,
+			expected: jwt.Scope{
+				{
+					TenantID:          "tenant1",
+					ResourceServerID:  "server1",
+					ResourceNamespace: "namespace1",
+					Role:              "admin",
+				},
+			},
+		},
+		{
+			name:  "Acronis URN format via custom decoder",
+			input: `["urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin"]`,
+			expected: jwt.Scope{
+				{
+					TenantUUID:        "11111111-1111-1111-1111-111111111111",
+					ResourceServerID:  "identity",
+					ResourceNamespace: "tenant",
+					Role:              "admin",
+				},
+			},
+		},
+		{
+			name:        "invalid JSON",
+			input:       `invalid`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var scope jwt.Scope
+			err := json.Unmarshal([]byte(tt.input), &scope)
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, scope)
+		})
+	}
+}
+
+func TestRegisterScopeDecoder_Idempotent(t *testing.T) {
+	// Test that multiple calls are safe
+	RegisterScopeDecoder()
+	RegisterScopeDecoder()
+	RegisterScopeDecoder()
+
+	// Test concurrent calls
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			RegisterScopeDecoder()
+		}()
+	}
+	wg.Wait()
+
+	// Verify the decoder still works correctly
+	input := `["urn:acronis:identity:tenant:11111111-1111-1111-1111-111111111111:admin"]`
+	var scope jwt.Scope
+	err := json.Unmarshal([]byte(input), &scope)
+	require.NoError(t, err)
+
+	expected := jwt.Scope{
+		{
+			TenantUUID:        "11111111-1111-1111-1111-111111111111",
+			ResourceServerID:  "identity",
+			ResourceNamespace: "tenant",
+			Role:              "admin",
+		},
+	}
+	assert.Equal(t, expected, scope)
 }
