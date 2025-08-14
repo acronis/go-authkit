@@ -31,6 +31,7 @@ var (
 	ErrCodeBearerTokenMissing   = "bearerTokenMissing"
 	ErrCodeAuthenticationFailed = "authenticationFailed"
 	ErrCodeAuthorizationFailed  = "authorizationFailed"
+	ErrCodeServiceUnavailable   = "serviceUnavailable"
 )
 
 // Authentication error messages.
@@ -39,6 +40,7 @@ var (
 	ErrMessageBearerTokenMissing   = "Authorization bearer token is missing."
 	ErrMessageAuthenticationFailed = "Authentication is failed."
 	ErrMessageAuthorizationFailed  = "Authorization is failed."
+	ErrMessageServiceUnavailable   = "Service temporarily unavailable."
 )
 
 type ctxKey int
@@ -153,6 +155,8 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	var jwtClaims jwt.Claims
 	if h.tokenIntrospector != nil {
 		if introspectionResult, err := h.tokenIntrospector.IntrospectToken(r.Context(), bearerToken); err != nil {
+			var throttledErr *idptoken.ThrottledError
+			var svcUnavailableErr *idptoken.ServiceUnavailableError
 			switch {
 			case errors.Is(err, idptoken.ErrTokenIntrospectionNotNeeded):
 				// Do nothing. Access Token already contains all necessary information for authN/authZ.
@@ -172,6 +176,18 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				logger.Error("token's introspection failed because of invalid claims", log.Error(err))
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusInvalidClaims)
 				h.respondAuthNFailedError(rw, logger)
+				return
+
+			case errors.As(err, &throttledErr):
+				logger.Warn("token's introspection failed due to throttling", log.Error(err))
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusThrottled)
+				h.respondServiceUnavailableError(rw, logger, throttledErr.RetryAfter)
+				return
+
+			case errors.As(err, &svcUnavailableErr):
+				logger.Warn("token's introspection failed because of service unavailability", log.Error(err))
+				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusServiceUnavailable)
+				h.respondServiceUnavailableError(rw, logger, svcUnavailableErr.RetryAfter)
 				return
 
 			default:
@@ -222,6 +238,14 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 func (h *jwtAuthHandler) respondAuthNFailedError(rw http.ResponseWriter, logger log.FieldLogger) {
 	apiErr := restapi.NewError(h.errorDomain, ErrCodeAuthenticationFailed, ErrMessageAuthenticationFailed)
 	restapi.RespondError(rw, http.StatusUnauthorized, apiErr, logger)
+}
+
+func (h *jwtAuthHandler) respondServiceUnavailableError(rw http.ResponseWriter, logger log.FieldLogger, retryAfter string) {
+	if retryAfter != "" {
+		rw.Header().Set("Retry-After", retryAfter)
+	}
+	apiErr := restapi.NewError(h.errorDomain, ErrCodeServiceUnavailable, ErrMessageServiceUnavailable)
+	restapi.RespondError(rw, http.StatusServiceUnavailable, apiErr, logger)
 }
 
 // GetBearerTokenFromRequest extracts jwt token from request headers.

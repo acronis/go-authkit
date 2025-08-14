@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -49,6 +50,8 @@ type HTTPServerTokenIntrospectorMock struct {
 	lastIntrospectedToken   atomic.Pointer[string]
 	lastUserAgentHeader     atomic.Pointer[string]
 	lastFormValues          atomic.Pointer[url.Values]
+
+	RetryAfter string
 }
 
 func NewHTTPServerTokenIntrospectorMock() *HTTPServerTokenIntrospectorMock {
@@ -81,7 +84,21 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	m.lastIntrospectedToken.Store(&token)
 	m.lastFormValues.Store(&r.Form)
 
-	if authHeader != "Bearer "+m.accessTokenForIntrospection {
+	// Check for special tokens that trigger HTTP errors
+	if token == "service-unavailable-token" {
+		return nil, &idptoken.ServiceUnavailableError{
+			RetryAfter: m.RetryAfter,
+			Err:        fmt.Errorf("HTTP 503 Service Unavailable"),
+		}
+	}
+	if token == "throttled-token" {
+		return nil, &idptoken.ThrottledError{
+			RetryAfter: m.RetryAfter,
+			Err:        fmt.Errorf("HTTP 429 Too Many Requests"),
+		}
+	}
+
+	if m.LastAuthorizationHeader() != "Bearer "+m.accessTokenForIntrospection {
 		return nil, idptest.ErrUnauthorized
 	}
 
@@ -165,6 +182,8 @@ type GRPCServerTokenIntrospectorMock struct {
 	lastSessionMeta       atomic.Pointer[string]
 	lastRequest           atomic.Pointer[pb.IntrospectTokenRequest]
 	lastUserAgentMeta     atomic.Pointer[string]
+
+	RetryAfter string
 }
 
 func NewGRPCServerTokenIntrospectorMock() *GRPCServerTokenIntrospectorMock {
@@ -222,10 +241,26 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	m.lastRequest.Store(req)
 
 	if requestedResponseCode != 0 {
+		if requestedResponseCode == codes.ResourceExhausted || requestedResponseCode == codes.Unavailable {
+			// Set retry-after metadata for ResourceExhausted and Unavailable errors
+			retryAfterMD := metadata.Pairs("retry-after", m.RetryAfter)
+			if err := grpc.SetHeader(ctx, retryAfterMD); err != nil {
+				return nil, status.Error(codes.Internal, "set retry-after header")
+			}
+		}
 		return nil, status.Error(requestedResponseCode, "Explicitly requested response code is returned")
 	}
 
-	if authMeta == "" && sessionMeta == "" {
+	// Check for special tokens that trigger gRPC errors
+	if req.Token == "grpc-exhausted-token" {
+		retryAfterMD := metadata.Pairs("retry-after", m.RetryAfter)
+		if err := grpc.SetHeader(ctx, retryAfterMD); err != nil {
+			return nil, status.Error(codes.Internal, "set retry-after header")
+		}
+		return nil, status.Error(codes.ResourceExhausted, "Resource exhausted")
+	}
+
+	if m.LastAuthorizationMeta() == "" && m.LastSessionMeta() == "" {
 		return nil, status.Error(codes.Unauthenticated, "Access Token or Session ID is missing")
 	}
 	if authMeta != "" && authMeta != "Bearer "+m.accessTokenForIntrospection {

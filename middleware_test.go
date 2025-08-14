@@ -142,6 +142,94 @@ func TestJWTAuthMiddleware(t *testing.T) {
 			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusError), 1)
 	})
 
+	t.Run("service unavailable", func(t *testing.T) {
+		const issuer = "my-idp.com"
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		introspector := &mockTokenIntrospector{errToReturn: &idptoken.ServiceUnavailableError{
+			RetryAfter: "60",
+			Err:        errors.New("service unavailable"),
+		}}
+		next := &mockJWTAuthMiddlewareNextHandler{}
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		withBearerToken(req, testBearerToken)
+		resp := httptest.NewRecorder()
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusServiceUnavailable), 0)
+
+		authkit.JWTAuthMiddleware(testErrDomain, parser, authkit.WithJWTAuthMiddlewareTokenIntrospector(introspector))(next).
+			ServeHTTP(resp, req)
+
+		testutil.RequireErrorInRecorder(t, resp, http.StatusServiceUnavailable, testErrDomain, authkit.ErrCodeServiceUnavailable)
+		require.Equal(t, "60", resp.Header().Get("Retry-After"))
+		require.Equal(t, 1, introspector.introspectCalled)
+		require.Equal(t, 0, parser.parseCalled)
+		require.Equal(t, 0, next.called)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics("", metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusServiceUnavailable), 1)
+	})
+
+	t.Run("throttled", func(t *testing.T) {
+		const issuer = "my-idp.com"
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		introspector := &mockTokenIntrospector{errToReturn: &idptoken.ThrottledError{
+			RetryAfter: "30",
+			Err:        errors.New("throttled"),
+		}}
+		next := &mockJWTAuthMiddlewareNextHandler{}
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		withBearerToken(req, testBearerToken)
+		resp := httptest.NewRecorder()
+
+		const promLabel = "throttled_test"
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics(promLabel, metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusThrottled), 0)
+
+		authkit.JWTAuthMiddleware(testErrDomain, parser, authkit.WithJWTAuthMiddlewareTokenIntrospector(introspector),
+			authkit.WithJWTAuthMiddlewarePrometheusLibInstanceLabel(promLabel))(next).
+			ServeHTTP(resp, req)
+
+		testutil.RequireErrorInRecorder(t, resp, http.StatusServiceUnavailable, testErrDomain, authkit.ErrCodeServiceUnavailable)
+		require.Equal(t, "30", resp.Header().Get("Retry-After"))
+		require.Equal(t, 1, introspector.introspectCalled)
+		require.Equal(t, 0, parser.parseCalled)
+		require.Equal(t, 0, next.called)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics(promLabel, metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusThrottled), 1)
+	})
+
+	t.Run("service unavailable from new error type", func(t *testing.T) {
+		const issuer = "my-idp.com"
+		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}
+		introspector := &mockTokenIntrospector{errToReturn: &idptoken.ServiceUnavailableError{
+			RetryAfter: "120",
+			Err:        errors.New("service unavailable"),
+		}}
+		next := &mockJWTAuthMiddlewareNextHandler{}
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		withBearerToken(req, testBearerToken)
+		resp := httptest.NewRecorder()
+
+		const promLabel = "svc_unavailable_new_test"
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics(promLabel, metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusServiceUnavailable), 0)
+
+		authkit.JWTAuthMiddleware(testErrDomain, parser, authkit.WithJWTAuthMiddlewareTokenIntrospector(introspector),
+			authkit.WithJWTAuthMiddlewarePrometheusLibInstanceLabel(promLabel))(next).
+			ServeHTTP(resp, req)
+
+		testutil.RequireErrorInRecorder(t, resp, http.StatusServiceUnavailable, testErrDomain, authkit.ErrCodeServiceUnavailable)
+		require.Equal(t, "120", resp.Header().Get("Retry-After"))
+		require.Equal(t, 1, introspector.introspectCalled)
+		require.Equal(t, 0, parser.parseCalled)
+		require.Equal(t, 0, next.called)
+
+		testutil.RequireSamplesCountInCounter(t, metrics.GetPrometheusMetrics(promLabel, metrics.SourceHTTPMiddleware).
+			TokenIntrospectionsTotal.WithLabelValues(metrics.TokenIntrospectionStatusServiceUnavailable), 1)
+	})
+
 	t.Run("introspection is not needed", func(t *testing.T) {
 		const issuer = "my-idp.com"
 		parser := &mockJWTParser{claimsToReturn: &jwt.DefaultClaims{RegisteredClaims: jwtgo.RegisteredClaims{Issuer: issuer}}}

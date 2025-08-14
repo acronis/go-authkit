@@ -49,7 +49,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 	if jwksCacheUpdateMinInterval == 0 {
 		jwksCacheUpdateMinInterval = jwks.DefaultCacheUpdateMinInterval
 	}
-	httpClient := idputil.MakeDefaultHTTPClient(
+	httpClient := idputil.MakeHTTPClientWithFastRetryPolicy(
 		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider,
 		options.requestIDProvider, options.userAgent,
 	)
@@ -220,7 +220,7 @@ func NewTokenIntrospector(
 		}
 	}
 
-	httpClient := idputil.MakeDefaultHTTPClient(
+	httpClient := idputil.MakeHTTPClientWithFastRetryPolicy(
 		time.Duration(cfg.HTTPClient.RequestTimeout), options.loggerProvider, options.requestIDProvider, options.userAgent)
 
 	introspectorOpts := idptoken.IntrospectorOpts{

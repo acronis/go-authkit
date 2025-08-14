@@ -60,7 +60,8 @@ func NewClient() *Client {
 func NewClientWithOpts(opts ClientOpts) *Client {
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceJWKSClient)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
+		opts.HTTPClient = idputil.MakeHTTPClientWithFastRetryPolicy(
+			idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
 	}
 	return &Client{httpClient: opts.HTTPClient, loggerProvider: opts.LoggerProvider, promMetrics: promMetrics}
 }

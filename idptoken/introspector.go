@@ -73,6 +73,50 @@ var ErrUnauthenticated = errors.New("request is unauthenticated")
 // ErrPermissionDenied is returned when a request is authenticated but has no permission to access the resource.
 var ErrPermissionDenied = errors.New("permission denied")
 
+// ThrottledError represents an error that occurs when the introspection endpoint is throttling
+// due to resource exhaustion, in-flight request limits, or similar constraints.
+type ThrottledError struct {
+	RetryAfter string // seconds or HTTP-date format
+	Err        error
+}
+
+func (e *ThrottledError) Error() string {
+	msg := "request throttled"
+	if e.RetryAfter != "" {
+		msg += fmt.Sprintf(" (retry after %s)", e.RetryAfter)
+	}
+	if e.Err != nil {
+		msg += fmt.Sprintf(": %v", e.Err)
+	}
+	return msg
+}
+
+func (e *ThrottledError) Unwrap() error {
+	return e.Err
+}
+
+// ServiceUnavailableError represents an error that occurs when the introspection endpoint is unavailable
+// due to maintenance, overloading, or temporary service outages.
+type ServiceUnavailableError struct {
+	RetryAfter string // seconds or HTTP-date format
+	Err        error
+}
+
+func (e *ServiceUnavailableError) Error() string {
+	msg := "service unavailable"
+	if e.RetryAfter != "" {
+		msg += fmt.Sprintf(" (retry after %s)", e.RetryAfter)
+	}
+	if e.Err != nil {
+		msg += fmt.Sprintf(": %v", e.Err)
+	}
+	return msg
+}
+
+func (e *ServiceUnavailableError) Unwrap() error {
+	return e.Err
+}
+
 // TrustedIssNotFoundFallback is a function called when given issuer is not found in the list of trusted ones.
 // For example, it could be analyzed and then added to the list by calling AddTrustedIssuerURL method.
 type TrustedIssNotFoundFallback func(ctx context.Context, i *Introspector, iss string) (issURL string, issFound bool)
@@ -279,7 +323,8 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 	}
 
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = idputil.MakeDefaultHTTPClient(idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
+		opts.HTTPClient = idputil.MakeHTTPClientWithFastRetryPolicy(
+			idputil.DefaultHTTPRequestTimeout, opts.LoggerProvider, nil, libinfo.UserAgent())
 	}
 
 	values := url.Values{}
@@ -579,6 +624,7 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 			}
 		}()
 		if resp.StatusCode != http.StatusOK {
+			unexpectedCodeErr := fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
 			i.promMetrics.ObserveHTTPClientRequest(
 				http.MethodPost, introspectionEndpointURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
 			switch resp.StatusCode {
@@ -586,8 +632,18 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 				return nil, ErrUnauthenticated
 			case http.StatusForbidden:
 				return nil, ErrPermissionDenied
+			case http.StatusTooManyRequests:
+				return nil, &ThrottledError{
+					RetryAfter: resp.Header.Get("Retry-After"),
+					Err:        unexpectedCodeErr,
+				}
+			case http.StatusServiceUnavailable:
+				return nil, &ServiceUnavailableError{
+					RetryAfter: resp.Header.Get("Retry-After"),
+					Err:        unexpectedCodeErr,
+				}
 			}
-			return nil, fmt.Errorf("unexpected HTTP code %d for POST %s", resp.StatusCode, introspectionEndpointURL)
+			return nil, unexpectedCodeErr
 		}
 
 		var res IntrospectionResult

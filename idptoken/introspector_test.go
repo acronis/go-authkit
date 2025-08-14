@@ -35,9 +35,11 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 
 	httpServerIntrospector := testing.NewHTTPServerTokenIntrospectorMock()
 	httpServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+	httpServerIntrospector.RetryAfter = "42" // in seconds
 
 	grpcServerIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
 	grpcServerIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+	grpcServerIntrospector.RetryAfter = "73" // in seconds
 
 	httpIDPSrv := idptest.NewHTTPServer(idptest.WithHTTPTokenIntrospector(httpServerIntrospector))
 	require.NoError(t, httpIDPSrv.StartAndWaitForReady(time.Second))
@@ -416,6 +418,32 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			expectedHTTPSrvCalled: true,
 		},
 		{
+			name: "error, static http introspection endpoint, service unavailable",
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+			},
+			tokenToIntrospect: "service-unavailable-token",
+			checkError: func(t *gotesting.T, err error) {
+				var svcUnavailableErr *idptoken.ServiceUnavailableError
+				require.ErrorAs(t, err, &svcUnavailableErr)
+				require.Equal(t, httpServerIntrospector.RetryAfter, svcUnavailableErr.RetryAfter)
+			},
+			expectedHTTPSrvCalled: true,
+		},
+		{
+			name: "error, static http introspection endpoint, throttled",
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+			},
+			tokenToIntrospect: "throttled-token",
+			checkError: func(t *gotesting.T, err error) {
+				var throttledErr *idptoken.ThrottledError
+				require.ErrorAs(t, err, &throttledErr)
+				require.Equal(t, httpServerIntrospector.RetryAfter, throttledErr.RetryAfter)
+			},
+			expectedHTTPSrvCalled: true,
+		},
+		{
 			name: "error, static http introspection endpoint, opaque token, audience is missing",
 			introspectorOpts: idptoken.IntrospectorOpts{
 				HTTPEndpoint:     httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
@@ -477,6 +505,18 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			accessToken:       "invalid-access-token",
 			checkError: func(t *gotesting.T, err error) {
 				require.ErrorIs(t, err, idptoken.ErrUnauthenticated)
+			},
+			expectedGRPCSrvCalled: true,
+		},
+		{
+			name:              "error, grpc introspection endpoint, resource exhausted",
+			useGRPCClient:     true,
+			introspectorOpts:  idptoken.IntrospectorOpts{},
+			tokenToIntrospect: "grpc-exhausted-token",
+			checkError: func(t *gotesting.T, err error) {
+				var throttledErr *idptoken.ThrottledError
+				require.ErrorAs(t, err, &throttledErr)
+				require.Equal(t, grpcServerIntrospector.RetryAfter, throttledErr.RetryAfter)
 			},
 			expectedGRPCSrvCalled: true,
 		},
