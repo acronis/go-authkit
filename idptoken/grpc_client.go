@@ -149,13 +149,12 @@ func (c *GRPCClient) IntrospectToken(
 	}
 
 	var headerMD metadata.MD
-	var opts = []grpc.CallOption{grpc.Header(&headerMD)}
 	var resp *pb.IntrospectTokenResponse
 	if err := c.do(ctx, "IDPTokenService/IntrospectToken", func(ctx context.Context) error {
 		var innerErr error
-		resp, innerErr = c.client.IntrospectToken(ctx, &req, opts...)
+		resp, innerErr = c.client.IntrospectToken(ctx, &req, grpc.Header(&headerMD))
 		return innerErr
-	}); err != nil {
+	}, &headerMD); err != nil {
 		if errors.Is(err, ErrUnauthenticated) {
 			c.setSessionID("")
 		}
@@ -258,12 +257,13 @@ func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, opts ...Ex
 		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaRequestID, c.requestIDProvider(ctx))
 	}
 
+	var headerMD metadata.MD
 	var resp *pb.CreateTokenResponse
 	if err := c.do(ctx, "IDPTokenService/CreateToken", func(ctx context.Context) error {
 		var innerErr error
-		resp, innerErr = c.client.CreateToken(ctx, &req)
+		resp, innerErr = c.client.CreateToken(ctx, &req, grpc.Header(&headerMD))
 		return innerErr
-	}); err != nil {
+	}, &headerMD); err != nil {
 		return TokenData{}, err
 	}
 
@@ -274,7 +274,16 @@ func (c *GRPCClient) ExchangeToken(ctx context.Context, token string, opts ...Ex
 	}, nil
 }
 
-func (c *GRPCClient) do(ctx context.Context, methodName string, call func(ctx context.Context) error) error {
+func (c *GRPCClient) do(
+	ctx context.Context, methodName string, call func(ctx context.Context) error, headerMD *metadata.MD,
+) error {
+	getRetryAfter := func() string {
+		if mdRetryAfter := headerMD.Get("retry-after"); len(mdRetryAfter) > 0 {
+			return mdRetryAfter[0]
+		}
+		return ""
+	}
+
 	ctx, ctxCancel := context.WithTimeout(ctx, c.reqTimeout)
 	defer ctxCancel()
 
@@ -292,6 +301,10 @@ func (c *GRPCClient) do(ctx context.Context, methodName string, call func(ctx co
 			return ErrUnauthenticated
 		case grpccodes.PermissionDenied:
 			return ErrPermissionDenied
+		case grpccodes.ResourceExhausted:
+			return &ThrottledError{RetryAfter: getRetryAfter(), Err: err}
+		case grpccodes.Unavailable:
+			return &ServiceUnavailableError{RetryAfter: getRetryAfter(), Err: err}
 		}
 		return err
 	}

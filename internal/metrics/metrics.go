@@ -48,12 +48,14 @@ const (
 	HTTPRequestErrorDecodeBody           = "decode_body_error"
 	HTTPRequestErrorUnexpectedStatusCode = "unexpected_status_code"
 
-	TokenIntrospectionStatusActive            = "active"
-	TokenIntrospectionStatusNotActive         = "not_active"
-	TokenIntrospectionStatusNotNeeded         = "not_needed"
-	TokenIntrospectionStatusNotIntrospectable = "not_introspectable"
-	TokenIntrospectionStatusInvalidClaims     = "invalid_claims"
-	TokenIntrospectionStatusError             = "error"
+	TokenIntrospectionStatusActive             = "active"
+	TokenIntrospectionStatusNotActive          = "not_active"
+	TokenIntrospectionStatusNotNeeded          = "not_needed"
+	TokenIntrospectionStatusNotIntrospectable  = "not_introspectable"
+	TokenIntrospectionStatusInvalidClaims      = "invalid_claims"
+	TokenIntrospectionStatusServiceUnavailable = "service_unavailable"
+	TokenIntrospectionStatusThrottled          = "throttled"
+	TokenIntrospectionStatusError              = "error"
 )
 
 type Source string

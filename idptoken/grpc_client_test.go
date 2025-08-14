@@ -57,6 +57,7 @@ func TestGRPCClient_IntrospectToken(t *gotesting.T) {
 	}
 
 	grpcServerTokenIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+	grpcServerTokenIntrospector.RetryAfter = "42" // in seconds
 	grpcServerTokenIntrospector.SetAccessTokenForIntrospection(validAccessToken)
 	grpcServerTokenIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
 		Active:    true,
@@ -198,6 +199,42 @@ func TestGRPCClient_IntrospectToken(t *gotesting.T) {
 					},
 					serverLastAuthorizationMetaExpected: "Bearer " + validAccessToken,
 					serverLastSessionMetaExpected:       "", // prev 401 drops session id in client so access token ust be used
+				},
+			},
+		},
+		{
+			name: "ResourceExhausted error with retry-after metadata",
+			requestSeries: []introspectionRequest{
+				{
+					requestNumber:     1,
+					tokenToIntrospect: opaqueToken,
+					accessToken:       validAccessToken,
+					serverRespCode:    codes.ResourceExhausted,
+					checkError: func(t *gotesting.T, err error) {
+						var throttledErr *idptoken.ThrottledError
+						require.ErrorAs(t, err, &throttledErr)
+						require.Equal(t, grpcServerTokenIntrospector.RetryAfter, throttledErr.RetryAfter)
+					},
+					serverLastAuthorizationMetaExpected: "Bearer " + validAccessToken,
+					serverLastSessionMetaExpected:       "",
+				},
+			},
+		},
+		{
+			name: "Unavailable error with retry-after metadata",
+			requestSeries: []introspectionRequest{
+				{
+					requestNumber:     1,
+					tokenToIntrospect: opaqueToken,
+					accessToken:       validAccessToken,
+					serverRespCode:    codes.Unavailable,
+					checkError: func(t *gotesting.T, err error) {
+						var svcUnavailableErr *idptoken.ServiceUnavailableError
+						require.ErrorAs(t, err, &svcUnavailableErr)
+						require.Equal(t, grpcServerTokenIntrospector.RetryAfter, svcUnavailableErr.RetryAfter)
+					},
+					serverLastAuthorizationMetaExpected: "Bearer " + validAccessToken,
+					serverLastSessionMetaExpected:       "",
 				},
 			},
 		},

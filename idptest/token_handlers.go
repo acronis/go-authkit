@@ -41,11 +41,23 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if h.ClaimsProvider != nil {
 		var err error
 		if claims, err = h.ClaimsProvider.Provide(r); err != nil {
+			var throttledErr *idptoken.ThrottledError
+			var svcUnavailableErr *idptoken.ServiceUnavailableError
 			switch {
 			case errors.Is(err, ErrUnauthorized):
 				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
 			case errors.Is(err, ErrPermissionDenied):
 				http.Error(rw, "Permission denied", http.StatusForbidden)
+			case errors.As(err, &throttledErr):
+				if throttledErr.RetryAfter != "" {
+					rw.Header().Set("Retry-After", throttledErr.RetryAfter)
+				}
+				http.Error(rw, "Too Many Requests", http.StatusTooManyRequests)
+			case errors.As(err, &svcUnavailableErr):
+				if svcUnavailableErr.RetryAfter != "" {
+					rw.Header().Set("Retry-After", svcUnavailableErr.RetryAfter)
+				}
+				http.Error(rw, "Service Unavailable", http.StatusServiceUnavailable)
 			default:
 				http.Error(rw, fmt.Sprintf("Claims provider failed to provide claims: %v", err), http.StatusInternalServerError)
 			}
@@ -138,11 +150,23 @@ func (h *TokenIntrospectionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Re
 	if h.TokenIntrospector != nil {
 		var err error
 		if introspectResult, err = h.TokenIntrospector.IntrospectToken(r, token); err != nil {
+			var throttledErr *idptoken.ThrottledError
+			var svcUnavailableErr *idptoken.ServiceUnavailableError
 			switch {
 			case errors.Is(err, ErrUnauthorized):
 				http.Error(rw, "Unauthorized", http.StatusUnauthorized)
 			case errors.Is(err, ErrPermissionDenied):
 				http.Error(rw, "Permission denied", http.StatusForbidden)
+			case errors.As(err, &throttledErr):
+				if throttledErr.RetryAfter != "" {
+					rw.Header().Set("Retry-After", throttledErr.RetryAfter)
+				}
+				http.Error(rw, "Too Many Requests", http.StatusTooManyRequests)
+			case errors.As(err, &svcUnavailableErr):
+				if svcUnavailableErr.RetryAfter != "" {
+					rw.Header().Set("Retry-After", svcUnavailableErr.RetryAfter)
+				}
+				http.Error(rw, "Service Unavailable", http.StatusServiceUnavailable)
 			default:
 				http.Error(rw, fmt.Sprintf("Token introspection failed: %v", err), http.StatusInternalServerError)
 			}

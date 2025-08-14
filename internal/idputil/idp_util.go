@@ -13,6 +13,7 @@ import (
 
 	"github.com/acronis/go-appkit/httpclient"
 	"github.com/acronis/go-appkit/log"
+	"github.com/acronis/go-appkit/retry"
 
 	"github.com/acronis/go-authkit/internal/libinfo"
 )
@@ -38,14 +39,41 @@ func MakeDefaultHTTPClient(
 	requestIDProvider func(ctx context.Context) string,
 	userAgent string,
 ) *http.Client {
-	if reqTimeout == 0 {
-		reqTimeout = DefaultHTTPRequestTimeout
-	}
-	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
 	retryableOpts := httpclient.RetryableRoundTripperOpts{
 		MaxRetryAttempts: DefaultHTTPRequestMaxRetryAttempts,
 		LoggerProvider:   loggerProvider,
 	}
+	return makeHTTPClient(reqTimeout, retryableOpts, requestIDProvider, userAgent)
+}
+
+// MakeHTTPClientWithFastRetryPolicy creates an HTTP client with a fast retry policy.
+// It is useful for cases where we don't want to wait too long for retries (e.g., during token introspection, fetching JWKS, etc.)
+func MakeHTTPClientWithFastRetryPolicy(
+	reqTimeout time.Duration,
+	loggerProvider func(ctx context.Context) log.FieldLogger,
+	requestIDProvider func(ctx context.Context) string,
+	userAgent string,
+) *http.Client {
+	const initialBackoff = 150 * time.Millisecond
+	retryableOpts := httpclient.RetryableRoundTripperOpts{
+		MaxRetryAttempts: 1,
+		LoggerProvider:   loggerProvider,
+		IgnoreRetryAfter: true,
+		BackoffPolicy:    retry.NewExponentialBackoffPolicy(initialBackoff, 1),
+	}
+	return makeHTTPClient(reqTimeout, retryableOpts, requestIDProvider, userAgent)
+}
+
+func makeHTTPClient(
+	reqTimeout time.Duration,
+	retryableOpts httpclient.RetryableRoundTripperOpts,
+	requestIDProvider func(ctx context.Context) string,
+	userAgent string,
+) *http.Client {
+	if reqTimeout == 0 {
+		reqTimeout = DefaultHTTPRequestTimeout
+	}
+	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
 	tr, _ = httpclient.NewRetryableRoundTripperWithOpts(tr, retryableOpts) // error is always nil
 	tr = httpclient.NewUserAgentRoundTripper(tr, userAgent)
 	if requestIDProvider != nil {
