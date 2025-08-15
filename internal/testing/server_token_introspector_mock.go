@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,11 +44,11 @@ type HTTPServerTokenIntrospectorMock struct {
 
 	accessTokenForIntrospection string
 
-	Called                  bool
-	LastAuthorizationHeader string
-	LastIntrospectedToken   string
-	LastUserAgentHeader     string
-	LastFormValues          url.Values
+	called                  atomic.Bool
+	lastAuthorizationHeader atomic.Pointer[string]
+	lastIntrospectedToken   atomic.Pointer[string]
+	lastUserAgentHeader     atomic.Pointer[string]
+	lastFormValues          atomic.Pointer[url.Values]
 }
 
 func NewHTTPServerTokenIntrospectorMock() *HTTPServerTokenIntrospectorMock {
@@ -72,13 +73,15 @@ func (m *HTTPServerTokenIntrospectorMock) SetAccessTokenForIntrospection(accessT
 func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 	r *http.Request, token string,
 ) (idptoken.IntrospectionResult, error) {
-	m.Called = true
-	m.LastAuthorizationHeader = r.Header.Get("Authorization")
-	m.LastUserAgentHeader = r.UserAgent()
-	m.LastIntrospectedToken = token
-	m.LastFormValues = r.Form
+	m.called.Store(true)
+	authHeader := r.Header.Get("Authorization")
+	userAgent := r.UserAgent()
+	m.lastAuthorizationHeader.Store(&authHeader)
+	m.lastUserAgentHeader.Store(&userAgent)
+	m.lastIntrospectedToken.Store(&token)
+	m.lastFormValues.Store(&r.Form)
 
-	if m.LastAuthorizationHeader != "Bearer "+m.accessTokenForIntrospection {
+	if authHeader != "Bearer "+m.accessTokenForIntrospection {
 		return nil, idptest.ErrUnauthorized
 	}
 
@@ -99,10 +102,45 @@ func (m *HTTPServerTokenIntrospectorMock) IntrospectToken(
 }
 
 func (m *HTTPServerTokenIntrospectorMock) ResetCallsInfo() {
-	m.Called = false
-	m.LastAuthorizationHeader = ""
-	m.LastIntrospectedToken = ""
-	m.LastFormValues = nil
+	m.called.Store(false)
+	emptyString := ""
+	m.lastAuthorizationHeader.Store(&emptyString)
+	m.lastIntrospectedToken.Store(&emptyString)
+	m.lastUserAgentHeader.Store(&emptyString)
+	var nilFormValues url.Values
+	m.lastFormValues.Store(&nilFormValues)
+}
+
+func (m *HTTPServerTokenIntrospectorMock) Called() bool {
+	return m.called.Load()
+}
+
+func (m *HTTPServerTokenIntrospectorMock) LastAuthorizationHeader() string {
+	if ptr := m.lastAuthorizationHeader.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (m *HTTPServerTokenIntrospectorMock) LastIntrospectedToken() string {
+	if ptr := m.lastIntrospectedToken.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (m *HTTPServerTokenIntrospectorMock) LastUserAgentHeader() string {
+	if ptr := m.lastUserAgentHeader.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (m *HTTPServerTokenIntrospectorMock) LastFormValues() url.Values {
+	if ptr := m.lastFormValues.Load(); ptr != nil {
+		return *ptr
+	}
+	return nil
 }
 
 const (
@@ -122,11 +160,11 @@ type GRPCServerTokenIntrospectorMock struct {
 
 	accessTokenForIntrospection string
 
-	Called                bool
-	LastAuthorizationMeta string
-	LastSessionMeta       string
-	LastRequest           *pb.IntrospectTokenRequest
-	LastUserAgentMeta     string
+	called                atomic.Bool
+	lastAuthorizationMeta atomic.Pointer[string]
+	lastSessionMeta       atomic.Pointer[string]
+	lastRequest           atomic.Pointer[pb.IntrospectTokenRequest]
+	lastUserAgentMeta     atomic.Pointer[string]
 }
 
 func NewGRPCServerTokenIntrospectorMock() *GRPCServerTokenIntrospectorMock {
@@ -151,26 +189,28 @@ func (m *GRPCServerTokenIntrospectorMock) SetAccessTokenForIntrospection(accessT
 func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	ctx context.Context, req *pb.IntrospectTokenRequest,
 ) (*pb.IntrospectTokenResponse, error) {
-	m.Called = true
+	m.called.Store(true)
 	md, found := metadata.FromIncomingContext(ctx)
 	if !found {
 		return nil, status.Error(codes.Internal, "incoming context contains no metadata")
 	}
+	var userAgent string
 	if mdVal := md.Get("user-agent"); len(mdVal) != 0 {
-		m.LastUserAgentMeta = mdVal[0]
-	} else {
-		m.LastUserAgentMeta = ""
+		userAgent = mdVal[0]
 	}
+	m.lastUserAgentMeta.Store(&userAgent)
+
+	var authMeta string
 	if mdVal := md.Get("authorization"); len(mdVal) != 0 {
-		m.LastAuthorizationMeta = mdVal[0]
-	} else {
-		m.LastAuthorizationMeta = ""
+		authMeta = mdVal[0]
 	}
+	m.lastAuthorizationMeta.Store(&authMeta)
+
+	var sessionMeta string
 	if mdVal := md.Get("x-session-id"); len(mdVal) != 0 {
-		m.LastSessionMeta = mdVal[0]
-	} else {
-		m.LastSessionMeta = ""
+		sessionMeta = mdVal[0]
 	}
+	m.lastSessionMeta.Store(&sessionMeta)
 	var requestedResponseCode codes.Code
 	if mdVal := md.Get(TestMetaRequestedRespCode); len(mdVal) != 0 {
 		if code, err := strconv.ParseUint(mdVal[0], 10, 32); err == nil {
@@ -179,19 +219,19 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	} else {
 		requestedResponseCode = 0
 	}
-	m.LastRequest = req
+	m.lastRequest.Store(req)
 
 	if requestedResponseCode != 0 {
 		return nil, status.Error(requestedResponseCode, "Explicitly requested response code is returned")
 	}
 
-	if m.LastAuthorizationMeta == "" && m.LastSessionMeta == "" {
+	if authMeta == "" && sessionMeta == "" {
 		return nil, status.Error(codes.Unauthenticated, "Access Token or Session ID is missing")
 	}
-	if m.LastAuthorizationMeta != "" && m.LastAuthorizationMeta != "Bearer "+m.accessTokenForIntrospection {
+	if authMeta != "" && authMeta != "Bearer "+m.accessTokenForIntrospection {
 		return nil, status.Error(codes.Unauthenticated, "Access Token is invalid")
 	}
-	if m.LastSessionMeta != "" && m.LastSessionMeta != GenerateSessionID(m.accessTokenForIntrospection) {
+	if sessionMeta != "" && sessionMeta != GenerateSessionID(m.accessTokenForIntrospection) {
 		return nil, status.Error(codes.Unauthenticated, "Session ID is invalid")
 	}
 
@@ -225,10 +265,42 @@ func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 }
 
 func (m *GRPCServerTokenIntrospectorMock) ResetCallsInfo() {
-	m.Called = false
-	m.LastAuthorizationMeta = ""
-	m.LastSessionMeta = ""
-	m.LastRequest = nil
+	m.called.Store(false)
+	emptyString := ""
+	m.lastAuthorizationMeta.Store(&emptyString)
+	m.lastSessionMeta.Store(&emptyString)
+	m.lastUserAgentMeta.Store(&emptyString)
+	var nilRequest *pb.IntrospectTokenRequest
+	m.lastRequest.Store(nilRequest)
+}
+
+func (m *GRPCServerTokenIntrospectorMock) Called() bool {
+	return m.called.Load()
+}
+
+func (m *GRPCServerTokenIntrospectorMock) LastAuthorizationMeta() string {
+	if ptr := m.lastAuthorizationMeta.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (m *GRPCServerTokenIntrospectorMock) LastSessionMeta() string {
+	if ptr := m.lastSessionMeta.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (m *GRPCServerTokenIntrospectorMock) LastRequest() *pb.IntrospectTokenRequest {
+	return m.lastRequest.Load()
+}
+
+func (m *GRPCServerTokenIntrospectorMock) LastUserAgentMeta() string {
+	if ptr := m.lastUserAgentMeta.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
 }
 
 func tokenToKey(token string) [sha256.Size]byte {

@@ -223,12 +223,12 @@ func TestGRPCClient_IntrospectToken(t *gotesting.T) {
 				} else {
 					require.Equal(t, req.expectedResult, result)
 				}
-				require.Equal(t, req.serverLastAuthorizationMetaExpected, grpcServerTokenIntrospector.LastAuthorizationMeta,
+				require.Equal(t, req.serverLastAuthorizationMetaExpected, grpcServerTokenIntrospector.LastAuthorizationMeta(),
 					fmt.Sprintf("unexpected server auth meta with introspection request number %d", req.requestNumber))
-				require.Equal(t, req.serverLastSessionMetaExpected, grpcServerTokenIntrospector.LastSessionMeta,
+				require.Equal(t, req.serverLastSessionMetaExpected, grpcServerTokenIntrospector.LastSessionMeta(),
 					fmt.Sprintf("unexpected server session meta with introspection request number %d", req.requestNumber))
 				if req.expectedResult != nil {
-					require.Equal(t, req.tokenToIntrospect, grpcServerTokenIntrospector.LastRequest.Token,
+					require.Equal(t, req.tokenToIntrospect, grpcServerTokenIntrospector.LastRequest().Token,
 						fmt.Sprintf("unexpected introspection result with introspection request number %d", req.requestNumber))
 				}
 			}
@@ -382,10 +382,10 @@ func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 				require.Equal(t, tt.expectedTokenData, tokenData)
 			}
 			if tt.expectedRequest != nil {
-				require.Equal(t, tt.expectedRequest.GrantType, grpcServerTokenCreator.LastRequest.GrantType)
-				require.Equal(t, tt.expectedRequest.Assertion, grpcServerTokenCreator.LastRequest.Assertion)
+				require.Equal(t, tt.expectedRequest.GrantType, grpcServerTokenCreator.LastRequest().GrantType)
+				require.Equal(t, tt.expectedRequest.Assertion, grpcServerTokenCreator.LastRequest().Assertion)
 				require.Equal(t, tt.expectedRequest.NotRequiredIntrospection,
-					grpcServerTokenCreator.LastRequest.NotRequiredIntrospection)
+					grpcServerTokenCreator.LastRequest().NotRequiredIntrospection)
 			}
 		})
 	}

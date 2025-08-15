@@ -9,6 +9,7 @@ package testing
 import (
 	"context"
 	"crypto/sha256"
+	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,8 +21,8 @@ import (
 type GRPCServerTokenCreatorMock struct {
 	results map[[sha256.Size]byte]*pb.CreateTokenResponse
 
-	Called      bool
-	LastRequest *pb.CreateTokenRequest
+	called      atomic.Bool
+	lastRequest atomic.Pointer[pb.CreateTokenRequest]
 }
 
 func NewGRPCServerTokenCreatorMock() *GRPCServerTokenCreatorMock {
@@ -37,8 +38,8 @@ func (m *GRPCServerTokenCreatorMock) SetResultForToken(token string, result *pb.
 func (m *GRPCServerTokenCreatorMock) CreateToken(
 	ctx context.Context, req *pb.CreateTokenRequest,
 ) (*pb.CreateTokenResponse, error) {
-	m.Called = true
-	m.LastRequest = req
+	m.called.Store(true)
+	m.lastRequest.Store(req)
 
 	if req.GrantType != idputil.GrantTypeJWTBearer {
 		return nil, status.Error(codes.InvalidArgument, "Unsupported GrantType")
@@ -54,6 +55,15 @@ func (m *GRPCServerTokenCreatorMock) CreateToken(
 }
 
 func (m *GRPCServerTokenCreatorMock) ResetCallsInfo() {
-	m.Called = false
-	m.LastRequest = nil
+	m.called.Store(false)
+	var nilRequest *pb.CreateTokenRequest
+	m.lastRequest.Store(nilRequest)
+}
+
+func (m *GRPCServerTokenCreatorMock) Called() bool {
+	return m.called.Load()
+}
+
+func (m *GRPCServerTokenCreatorMock) LastRequest() *pb.CreateTokenRequest {
+	return m.lastRequest.Load()
 }
