@@ -24,6 +24,7 @@ import (
 	"github.com/acronis/go-appkit/log"
 	"github.com/acronis/go-appkit/lrucache"
 	jwtgo "github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/libinfo"
@@ -220,6 +221,8 @@ type Introspector struct {
 	audienceValidator *jwt.AudienceValidator
 
 	staticIntrospect introspectFunc
+
+	sfGroup singleflight.Group
 }
 
 // DefaultIntrospectionResult is a default implementation of IntrospectionResult.
@@ -344,20 +347,26 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		}
 	}
 
-	introspectionResult, err := i.introspectToken(ctx, token)
+	resultVal, err, _ := i.sfGroup.Do(string(cacheKey[:]), func() (interface{}, error) {
+		result, err := i.introspectToken(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		if !result.IsActive() {
+			i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result.Clone(), CreatedAt: time.Now()})
+			return result, nil
+		}
+		result.GetClaims().ApplyScopeFilter(i.scopeFilter)
+		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result.Clone(), CreatedAt: time.Now()})
+		if err = i.validateClaims(result.GetClaims()); err != nil {
+			return nil, fmt.Errorf("validate claims: %w", err)
+		}
+		return result, nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, err // already wrapped
 	}
-	if !introspectionResult.IsActive() {
-		i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
-		return introspectionResult, nil
-	}
-	introspectionResult.GetClaims().ApplyScopeFilter(i.scopeFilter)
-	i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: introspectionResult.Clone(), CreatedAt: time.Now()})
-	if err = i.validateClaims(introspectionResult.GetClaims()); err != nil {
-		return nil, err
-	}
-	return introspectionResult, nil
+	return resultVal.(IntrospectionResult), nil
 }
 
 // AddTrustedIssuer adds trusted issuer with specified name and URL.

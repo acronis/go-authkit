@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	gotesting "testing"
 	"time"
 
@@ -985,5 +986,148 @@ func (ir *CustomIntrospectionResult) Clone() idptoken.IntrospectionResult {
 		Active:       ir.Active,
 		TokenType:    ir.TokenType,
 		CustomClaims: *ir.CustomClaims.Clone().(*CustomClaims),
+	}
+}
+
+func TestIntrospector_IntrospectToken_Singleflight(t *gotesting.T) {
+	const validAccessToken = "access-token-with-introspection-permission"
+
+	serverIntrospector := testing.NewHTTPServerTokenIntrospectorMock()
+	serverIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+
+	idpSrv := idptest.NewHTTPServer(idptest.WithHTTPTokenIntrospector(serverIntrospector))
+	require.NoError(t, idpSrv.StartAndWaitForReady(time.Second))
+	defer func() { _ = idpSrv.Shutdown(context.Background()) }()
+
+	// Setup test tokens
+	validJWTScope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "account_viewer",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	validJWTRegClaims := jwtgo.RegisteredClaims{
+		Issuer:    idpSrv.URL(),
+		Audience:  jwtgo.ClaimStrings{"https://rs.example.com"},
+		Subject:   uuid.NewString(),
+		ID:        uuid.NewString(),
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	validJWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims})
+	serverIntrospector.SetResultForToken(validJWT, &idptoken.DefaultIntrospectionResult{
+		Active:        true,
+		TokenType:     idputil.TokenTypeBearer,
+		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope},
+	}, nil)
+
+	// Different token for testing concurrent different tokens
+	validJWT2RegClaims := validJWTRegClaims
+	validJWT2RegClaims.ID = uuid.NewString()
+	validJWT2 := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWT2RegClaims})
+	serverIntrospector.SetResultForToken(validJWT2, &idptoken.DefaultIntrospectionResult{
+		Active:        true,
+		TokenType:     idputil.TokenTypeBearer,
+		DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWT2RegClaims, Scope: validJWTScope},
+	}, nil)
+
+	tests := []struct {
+		name                       string
+		tokens                     []string
+		expectedIntrospectionCalls uint64
+		introspectorOpts           idptoken.IntrospectorOpts
+	}{
+		{
+			name:                       "concurrent introspection of same JWT token should call introspection only once",
+			tokens:                     []string{validJWT, validJWT, validJWT},
+			expectedIntrospectionCalls: 1, // Only one call should be made due to singleflight
+			introspectorOpts: idptoken.IntrospectorOpts{
+				// Disable caching to ensure singleflight is tested, not cache
+				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: false},
+				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: false},
+			},
+		},
+		{
+			name:                       "concurrent introspection of different tokens should call introspection for each",
+			tokens:                     []string{validJWT, validJWT2, validJWT, validJWT2},
+			expectedIntrospectionCalls: 2, // Two different tokens should result in two calls
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: false},
+				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: false},
+			},
+		},
+		{
+			name:                       "singleflight with caching enabled should still work correctly",
+			tokens:                     []string{validJWT, validJWT, validJWT},
+			expectedIntrospectionCalls: 1, // First call goes through, subsequent are cached
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *gotesting.T) {
+			// Reset server call counts
+			idpSrv.ResetServedCounts()
+			serverIntrospector.ResetCallsInfo()
+
+			// Create introspector
+			introspector, err := idptoken.NewIntrospectorWithOpts(
+				idptest.NewSimpleTokenProvider(validAccessToken), tt.introspectorOpts)
+			require.NoError(t, err)
+			require.NoError(t, introspector.AddTrustedIssuerURL(idpSrv.URL()))
+
+			var wg sync.WaitGroup
+			results := make([]idptoken.IntrospectionResult, len(tt.tokens))
+			resErrors := make([]error, len(tt.tokens))
+			startCh := make(chan struct{}) // // Use a channel to coordinate the start of all goroutines
+			for i, token := range tt.tokens {
+				wg.Add(1)
+				go func(idx int, tok string) {
+					defer wg.Done()
+					<-startCh // Wait for signal to start all goroutines simultaneously
+					result, resErr := introspector.IntrospectToken(context.Background(), tok)
+					results[idx] = result
+					resErrors[idx] = resErr
+				}(i, token)
+			}
+
+			// Start all goroutines simultaneously and wait for them to finish
+			close(startCh)
+			wg.Wait()
+
+			// Verify all introspections succeeded
+			for i := range resErrors {
+				require.NoError(t, resErrors[i], "introspection %d failed", i)
+			}
+
+			// Verify all results are valid
+			for i, result := range results {
+				require.NotNil(t, result, "result %d is nil", i)
+				require.True(t, result.IsActive(), "result %d is not active", i)
+			}
+
+			// Verify singleflight behavior: the number of actual introspection calls
+			// should match expected count using server's introspection endpoint call count
+			actualIntrospectionCalls := idpSrv.ServedCounts()[idptest.TokenIntrospectionEndpointPath]
+			require.Equal(t, tt.expectedIntrospectionCalls, actualIntrospectionCalls,
+				"expected %d introspection calls, got %d", tt.expectedIntrospectionCalls, actualIntrospectionCalls)
+
+			// Verify results consistency for same tokens
+			tokenResultMap := make(map[string]idptoken.IntrospectionResult)
+			for i, token := range tt.tokens {
+				if existingResult, exists := tokenResultMap[token]; exists {
+					// Same token should produce identical results
+					require.Equal(t, existingResult, results[i],
+						"results for same token %s should be identical", token)
+				} else {
+					tokenResultMap[token] = results[i]
+				}
+			}
+
+			// Verify the number of unique tokens introspected matches expected calls
+			require.Equal(t, int(tt.expectedIntrospectionCalls), len(tokenResultMap))
+		})
 	}
 }
