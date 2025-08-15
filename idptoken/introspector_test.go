@@ -640,21 +640,21 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 				require.Equal(t, tt.expectedResult, result)
 			}
 
-			require.Equal(t, tt.expectedHTTPSrvCalled, httpServerIntrospector.Called)
+			require.Equal(t, tt.expectedHTTPSrvCalled, httpServerIntrospector.Called())
 			if tt.expectedHTTPSrvCalled {
-				require.Equal(t, tt.tokenToIntrospect, httpServerIntrospector.LastIntrospectedToken)
-				require.Equal(t, "Bearer "+tt.accessToken, httpServerIntrospector.LastAuthorizationHeader)
+				require.Equal(t, tt.tokenToIntrospect, httpServerIntrospector.LastIntrospectedToken())
+				require.Equal(t, "Bearer "+tt.accessToken, httpServerIntrospector.LastAuthorizationHeader())
 				if tt.expectedHTTPFormVals == nil {
 					tt.expectedHTTPFormVals = url.Values{"token": {tt.tokenToIntrospect}}
 				}
-				require.Equal(t, tt.expectedHTTPFormVals, httpServerIntrospector.LastFormValues)
+				require.Equal(t, tt.expectedHTTPFormVals, httpServerIntrospector.LastFormValues())
 			}
 
-			require.Equal(t, tt.expectedGRPCSrvCalled, grpcServerIntrospector.Called)
+			require.Equal(t, tt.expectedGRPCSrvCalled, grpcServerIntrospector.Called())
 			if tt.expectedGRPCSrvCalled {
-				require.Equal(t, tt.tokenToIntrospect, grpcServerIntrospector.LastRequest.Token)
-				require.Equal(t, tt.expectedGRPCScopeFilter, grpcServerIntrospector.LastRequest.GetScopeFilter())
-				require.Equal(t, "Bearer "+tt.accessToken, grpcServerIntrospector.LastAuthorizationMeta)
+				require.Equal(t, tt.tokenToIntrospect, grpcServerIntrospector.LastRequest().Token)
+				require.Equal(t, tt.expectedGRPCScopeFilter, grpcServerIntrospector.LastRequest().GetScopeFilter())
+				require.Equal(t, "Bearer "+tt.accessToken, grpcServerIntrospector.LastAuthorizationMeta())
 			}
 		})
 	}
@@ -926,9 +926,9 @@ func TestCachingIntrospector_IntrospectTokenWithCache(t *gotesting.T) {
 					idpSrv.ServedCounts()[idptest.OpenIDConfigurationPath])
 
 				if tt.expectedSrvCounts[i][idptest.TokenIntrospectionEndpointPath] > 0 {
-					require.Equal(t, token, serverIntrospector.LastIntrospectedToken)
-					require.Equal(t, "Bearer "+accessToken, serverIntrospector.LastAuthorizationHeader)
-					require.Equal(t, url.Values{"token": {token}}, serverIntrospector.LastFormValues)
+					require.Equal(t, token, serverIntrospector.LastIntrospectedToken())
+					require.Equal(t, "Bearer "+accessToken, serverIntrospector.LastAuthorizationHeader())
+					require.Equal(t, url.Values{"token": {token}}, serverIntrospector.LastFormValues())
 				}
 
 				time.Sleep(tt.delay)

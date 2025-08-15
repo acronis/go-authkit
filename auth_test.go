@@ -502,12 +502,12 @@ func TestTokenIntrospectorSetUserAgent(t *gotesting.T) {
 			_, err = introspector.IntrospectToken(context.Background(), opaqueToken)
 			require.NoError(t, err)
 			if tt.expectedUserAgent != "" {
-				require.Equal(t, fmt.Sprintf("%s %s", tt.expectedUserAgent, libinfo.UserAgent()), httpServerIntrospector.LastUserAgentHeader)
+				require.Equal(t, fmt.Sprintf("%s %s", tt.expectedUserAgent, libinfo.UserAgent()), httpServerIntrospector.LastUserAgentHeader())
 				if tt.cfg.Introspection.GRPC.Endpoint != "" {
-					require.Contains(t, grpcServerIntrospector.LastUserAgentMeta, tt.expectedUserAgent)
+					require.Contains(t, grpcServerIntrospector.LastUserAgentMeta(), tt.expectedUserAgent)
 				}
 			} else {
-				require.Contains(t, httpServerIntrospector.LastUserAgentHeader, defaultUserAgent)
+				require.Contains(t, httpServerIntrospector.LastUserAgentHeader(), defaultUserAgent)
 			}
 		})
 	}
