@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	gotesting "testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 )
 
 func TestHTTPServerOpenIDConfiguration(t *gotesting.T) {
+	customURL, _ := url.Parse("http://idp.example.com:1234")
 	tests := []struct {
 		name          string
 		options       []HTTPServerOption
@@ -36,6 +38,20 @@ func TestHTTPServerOpenIDConfiguration(t *gotesting.T) {
 					TokenEndpoint:         idpSrv.URL() + TokenEndpointPath,
 					IntrospectionEndpoint: idpSrv.URL() + TokenIntrospectionEndpointPath,
 					JWKSURI:               idpSrv.URL() + JWKSEndpointPath,
+				}, respData)
+			},
+		},
+		{
+			name:          "default endpoints, custom host",
+			openIDCfgPath: OpenIDConfigurationPath,
+			options: []HTTPServerOption{
+				WithOpenIDCustomURL(customURL),
+			},
+			checkResponse: func(t *gotesting.T, idpSrv *HTTPServer, respData OpenIDConfigurationResponse) {
+				require.Equal(t, OpenIDConfigurationResponse{
+					TokenEndpoint:         "http://idp.example.com:1234" + TokenEndpointPath,
+					IntrospectionEndpoint: "http://idp.example.com:1234" + TokenIntrospectionEndpointPath,
+					JWKSURI:               "http://idp.example.com:1234" + JWKSEndpointPath,
 				}, respData)
 			},
 		},
