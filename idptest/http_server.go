@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -136,6 +137,14 @@ func WithHTTPMiddleware(mw func(http.Handler) http.Handler) HTTPServerOption {
 	}
 }
 
+// WithOpenIDCustomURL sets a custom URL for related OpenID configuration URLs (JWKS, token, introspection).
+// Defaults URL based on the server's listen address.
+func WithOpenIDCustomURL(customURL *url.URL) HTTPServerOption {
+	return func(s *HTTPServer) {
+		s.openIDCustomURL = customURL
+	}
+}
+
 // HTTPPaths contains paths for different IDP endpoints.
 type HTTPPaths struct {
 	OpenIDConfiguration string
@@ -156,6 +165,7 @@ type HTTPServer struct {
 	OpenIDConfigurationHandler http.Handler
 	Router                     *http.ServeMux
 	afterListenCallbacks       []func()
+	openIDCustomURL            *url.URL
 }
 
 // NewHTTPServer creates a new IDPMockServer with provided options.
@@ -200,11 +210,18 @@ func NewHTTPServer(options ...HTTPServerOption) *HTTPServer {
 	}
 	openIDCfgHandler := &OpenIDConfigurationHandler{}
 	s.OpenIDConfigurationHandler = openIDCfgHandler
-	s.afterListenCallbacks = append(s.afterListenCallbacks, func() {
-		openIDCfgHandler.JWKSURL = s.URL() + s.paths.JWKS
-		openIDCfgHandler.TokenEndpointURL = s.URL() + s.paths.Token
-		openIDCfgHandler.IntrospectionEndpointURL = s.URL() + s.paths.TokenIntrospection
-	})
+	if s.openIDCustomURL == nil {
+		// by default, use the server URL in OpenID Configuration
+		s.afterListenCallbacks = append(s.afterListenCallbacks, func() {
+			openIDCfgHandler.JWKSURL = s.URL() + s.paths.JWKS
+			openIDCfgHandler.TokenEndpointURL = s.URL() + s.paths.Token
+			openIDCfgHandler.IntrospectionEndpointURL = s.URL() + s.paths.TokenIntrospection
+		})
+	} else {
+		openIDCfgHandler.JWKSURL = s.openIDCustomURL.JoinPath(s.paths.JWKS).String()
+		openIDCfgHandler.TokenEndpointURL = s.openIDCustomURL.JoinPath(s.paths.Token).String()
+		openIDCfgHandler.IntrospectionEndpointURL = s.openIDCustomURL.JoinPath(s.paths.TokenIntrospection).String()
+	}
 
 	s.Router = http.NewServeMux()
 	for path, handler := range s.allHandlers() {
