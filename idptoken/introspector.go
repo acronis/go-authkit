@@ -335,11 +335,13 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceTokenIntrospector)
 
-	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache, DefaultIntrospectionClaimsCacheMaxEntries, promMetrics)
+	claimsCache := makeIntrospectionClaimsCache(
+		opts.ClaimsCache, DefaultIntrospectionClaimsCacheMaxEntries, promMetrics.TokenClaimsCache)
 	if opts.ClaimsCache.TTL == 0 {
 		opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
 	}
-	negativeCache := makeIntrospectionClaimsCache(opts.NegativeCache, DefaultIntrospectionNegativeCacheMaxEntries, promMetrics)
+	negativeCache := makeIntrospectionClaimsCache(
+		opts.NegativeCache, DefaultIntrospectionNegativeCacheMaxEntries, promMetrics.TokenNegativeCache)
 	if opts.NegativeCache.TTL == 0 {
 		opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
 	}
@@ -770,7 +772,7 @@ type IntrospectionCacheItem struct {
 }
 
 func makeIntrospectionClaimsCache(
-	opts IntrospectorCacheOpts, defaultMaxEntries int, promMetrics *metrics.PrometheusMetrics,
+	opts IntrospectorCacheOpts, defaultMaxEntries int, promMetrics *lrucache.PrometheusMetrics,
 ) IntrospectionCache {
 	if !opts.Enabled {
 		return &disabledIntrospectionCache{}
@@ -778,8 +780,7 @@ func makeIntrospectionClaimsCache(
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = defaultMaxEntries
 	}
-	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionCacheItem](
-		opts.MaxEntries, promMetrics.TokenClaimsCache) // error is always nil here
+	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionCacheItem](opts.MaxEntries, promMetrics) // error is always nil here
 	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionCacheItem]{cache}
 }
 
