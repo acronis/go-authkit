@@ -564,8 +564,11 @@ func (i *Introspector) initStaticIntrospection(httpEndpoint string) {
 			if err != nil {
 				return nil, fmt.Errorf("get access token: %w", err)
 			}
+			var throttledErr *ThrottledError
 			res, err := i.GRPCClient.IntrospectToken(ctx, token, i.scopeFilter, accessToken)
-			if err == nil || errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrPermissionDenied) || ctx.Err() != nil {
+			// Do not invoke fallback in case of insufficient access or throttling limits.
+			if err == nil || errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrPermissionDenied) ||
+				errors.As(err, &throttledErr) || ctx.Err() != nil {
 				return res, err
 			}
 			if fallback == nil {
