@@ -169,6 +169,8 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	grpcServerIntrospector.SetResultForToken(validJWTWithGRPCErr, nil, grpcInternalErr)
 	opaqueTokenWithPermissionErr := "opaque-token-with-permission-err"
 	grpcServerIntrospector.SetResultForToken(opaqueTokenWithPermissionErr, nil, grpcstatus.Error(codes.PermissionDenied, "permission denied"))
+	opaqueTokenWithThrottlingErr := "opaque-token-with-throttling-err"
+	grpcServerIntrospector.SetResultForToken(opaqueTokenWithThrottlingErr, nil, grpcstatus.Error(codes.ResourceExhausted, "resource exhausted"))
 	opaqueTokenWithInternalErr := "opaque-token-with-internal-err"
 	grpcServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, grpcInternalErr)
 	httpServerIntrospector.SetResultForToken(opaqueTokenWithInternalErr, nil, fmt.Errorf("internal error"))
@@ -575,6 +577,20 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			tokenToIntrospect: opaqueTokenWithPermissionErr,
 			checkError: func(t *gotesting.T, err error) {
 				require.ErrorIs(t, err, idptoken.ErrPermissionDenied)
+			},
+			expectedGRPCSrvCalled: true,
+			expectedHTTPSrvCalled: false,
+		},
+		{
+			name:          "error, grpc introspection is failed, throttling limits reached, http introspection fallback is not called",
+			useGRPCClient: true,
+			introspectorOpts: idptoken.IntrospectorOpts{
+				HTTPEndpoint: httpIDPSrv.URL() + idptest.TokenIntrospectionEndpointPath,
+			},
+			tokenToIntrospect: opaqueTokenWithThrottlingErr,
+			checkError: func(t *gotesting.T, err error) {
+				var throttledErr *idptoken.ThrottledError
+				require.ErrorAs(t, err, &throttledErr)
 			},
 			expectedGRPCSrvCalled: true,
 			expectedHTTPSrvCalled: false,
