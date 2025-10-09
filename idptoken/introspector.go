@@ -24,6 +24,7 @@ import (
 	"github.com/acronis/go-appkit/log"
 	"github.com/acronis/go-appkit/lrucache"
 	jwtgo "github.com/golang-jwt/jwt/v5"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/acronis/go-authkit/internal/idputil"
@@ -783,6 +784,7 @@ func makeIntrospectionClaimsCache(
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = defaultMaxEntries
 	}
+	promMetrics = promMetrics.MustCurryWith(prometheus.Labels{metrics.CacheLabelSize: strconv.Itoa(opts.MaxEntries)})
 	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionCacheItem](opts.MaxEntries, promMetrics) // error is always nil here
 	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionCacheItem]{cache}
 }
@@ -817,8 +819,10 @@ func makeIntrospectionEndpointDiscoveryCache(
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = DefaultIntrospectionEndpointDiscoveryCacheMaxEntries
 	}
+	cacheMetrics := promMetrics.EndpointDiscoveryCache.MustCurryWith(
+		prometheus.Labels{metrics.CacheLabelSize: strconv.Itoa(opts.MaxEntries)})
 	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem](
-		opts.MaxEntries, promMetrics.EndpointDiscoveryCache) // error is always nil here
+		opts.MaxEntries, cacheMetrics) // error is always nil here
 	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem]{cache}
 }
 

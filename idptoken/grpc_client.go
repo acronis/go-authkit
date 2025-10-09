@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/acronis/go-appkit/log"
 	jwtgo "github.com/golang-jwt/jwt/v5"
@@ -28,6 +27,7 @@ import (
 	"github.com/acronis/go-authkit/idptoken/pb"
 	"github.com/acronis/go-authkit/internal/idputil"
 	"github.com/acronis/go-authkit/internal/metrics"
+	"github.com/acronis/go-authkit/internal/strutil"
 	"github.com/acronis/go-authkit/jwt"
 )
 
@@ -206,7 +206,7 @@ func (c *GRPCClient) IntrospectToken(
 	claims.SetScope(scope)
 
 	if customClaimsJSON := resp.GetCustomClaimsJson(); customClaimsJSON != "" {
-		if err := json.Unmarshal(stringToBytesUnsafe(customClaimsJSON), result); err != nil {
+		if err := json.Unmarshal(strutil.StringToBytesUnsafe(customClaimsJSON), result); err != nil {
 			return nil, fmt.Errorf("unmarshal custom claims: %w", err)
 		}
 	}
@@ -335,10 +335,4 @@ func (sh *statsHandler) HandleConn(ctx context.Context, s stats.ConnStats) {
 	case *stats.ConnEnd:
 		idputil.GetLoggerFromProvider(ctx, sh.loggerProvider).Infof("grpc connection closed")
 	}
-}
-
-// stringToBytesUnsafe converts string to byte slice without memory allocation.
-func stringToBytesUnsafe(s string) []byte {
-	// nolint: gosec // memory optimization to prevent redundant slice copying
-	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
