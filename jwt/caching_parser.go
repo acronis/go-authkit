@@ -10,12 +10,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"unsafe"
+	"strconv"
 
 	"github.com/acronis/go-appkit/lrucache"
 	jwtgo "github.com/golang-jwt/jwt/v5"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/acronis/go-authkit/internal/metrics"
+	"github.com/acronis/go-authkit/internal/strutil"
 )
 
 const DefaultClaimsCacheMaxEntries = 1000
@@ -52,7 +54,8 @@ func NewCachingParserWithOpts(
 	if opts.CacheMaxEntries == 0 {
 		opts.CacheMaxEntries = DefaultClaimsCacheMaxEntries
 	}
-	cache, err := lrucache.New[[sha256.Size]byte, Claims](opts.CacheMaxEntries, promMetrics.TokenClaimsCache)
+	cache, err := lrucache.New[[sha256.Size]byte, Claims](opts.CacheMaxEntries,
+		promMetrics.TokenClaimsCache.MustCurryWith(prometheus.Labels{metrics.CacheLabelSize: strconv.Itoa(opts.CacheMaxEntries)}))
 	if err != nil {
 		return nil, err
 	}
@@ -68,15 +71,9 @@ func getTokenHash(token []byte) [sha256.Size]byte {
 	return sha256.Sum256(token)
 }
 
-// stringToBytesUnsafe converts string to byte slice without memory allocation. (both heap and stack)
-func stringToBytesUnsafe(s string) []byte {
-	// nolint: gosec // memory optimization to prevent redundant slice copying
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
-
 // Parse calls Parse method of embedded original Parser but stores result into cache.
 func (cp *CachingParser) Parse(ctx context.Context, token string) (Claims, error) {
-	key := getTokenHash(stringToBytesUnsafe(token))
+	key := getTokenHash(strutil.StringToBytesUnsafe(token))
 	cachedClaims, foundInCache, validationErr := cp.getFromCacheAndValidateIfNeeded(key)
 	if foundInCache {
 		if validationErr != nil {
