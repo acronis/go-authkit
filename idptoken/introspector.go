@@ -258,10 +258,6 @@ type Introspector struct {
 
 	promMetrics *metrics.PrometheusMetrics
 
-	claimsCacheTTL            time.Duration
-	negativeCacheTTL          time.Duration
-	endpointDiscoveryCacheTTL time.Duration
-
 	claimsValidator   *jwtgo.Validator
 	audienceValidator *jwt.AudienceValidator
 
@@ -335,21 +331,11 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 	scopeFilterFormURLEncoded := values.Encode()
 
 	promMetrics := metrics.GetPrometheusMetrics(opts.PrometheusLibInstanceLabel, metrics.SourceTokenIntrospector)
-
-	claimsCache := makeIntrospectionClaimsCache(
-		opts.ClaimsCache, DefaultIntrospectionClaimsCacheMaxEntries, promMetrics.TokenClaimsCache)
-	if opts.ClaimsCache.TTL == 0 {
-		opts.ClaimsCache.TTL = DefaultIntrospectionClaimsCacheTTL
-	}
-	negativeCache := makeIntrospectionClaimsCache(
-		opts.NegativeCache, DefaultIntrospectionNegativeCacheMaxEntries, promMetrics.TokenNegativeCache)
-	if opts.NegativeCache.TTL == 0 {
-		opts.NegativeCache.TTL = DefaultIntrospectionNegativeCacheTTL
-	}
+	claimsCache := makeIntrospectionClaimsCache(opts.ClaimsCache,
+		DefaultIntrospectionClaimsCacheMaxEntries, DefaultIntrospectionClaimsCacheTTL, promMetrics.TokenClaimsCache)
+	negativeCache := makeIntrospectionClaimsCache(opts.NegativeCache,
+		DefaultIntrospectionNegativeCacheMaxEntries, DefaultIntrospectionNegativeCacheTTL, promMetrics.TokenNegativeCache)
 	endpointDiscoveryCache := makeIntrospectionEndpointDiscoveryCache(opts.EndpointDiscoveryCache, promMetrics)
-	if opts.EndpointDiscoveryCache.TTL == 0 {
-		opts.EndpointDiscoveryCache.TTL = DefaultIntrospectionEndpointDiscoveryCacheTTL
-	}
 
 	introspector := &Introspector{
 		accessTokenProvider:           accessTokenProvider,
@@ -365,11 +351,8 @@ func NewIntrospectorWithOpts(accessTokenProvider IntrospectionTokenProvider, opt
 		trustedIssuerNotFoundFallback: opts.TrustedIssuerNotFoundFallback,
 		promMetrics:                   promMetrics,
 		ClaimsCache:                   claimsCache,
-		claimsCacheTTL:                opts.ClaimsCache.TTL,
 		NegativeCache:                 negativeCache,
-		negativeCacheTTL:              opts.NegativeCache.TTL,
 		EndpointDiscoveryCache:        endpointDiscoveryCache,
-		endpointDiscoveryCacheTTL:     opts.EndpointDiscoveryCache.TTL,
 		claimsValidator:               jwtgo.NewValidator(jwtgo.WithExpirationRequired()),
 		audienceValidator:             jwt.NewAudienceValidator(opts.RequireAudience, opts.ExpectedAudience),
 	}
@@ -383,16 +366,14 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		unsafe.Slice(unsafe.StringData(token), len(token))) // nolint:gosec // prevent redundant slice copying
 
 	if cachedItem, ok := i.ClaimsCache.Get(ctx, cacheKey); ok {
-		if cachedItem.CreatedAt.Add(i.claimsCacheTTL).After(time.Now()) {
-			if err := i.validateClaims(cachedItem.IntrospectionResult.GetClaims()); err != nil {
-				return nil, err
-			}
-			return cachedItem.IntrospectionResult.Clone(), nil
+		if err := i.validateClaims(cachedItem.IntrospectionResult.GetClaims()); err != nil {
+			return nil, fmt.Errorf("validate claims of cached introspection result: %w", err)
 		}
-	} else if cachedItem, ok = i.NegativeCache.Get(ctx, cacheKey); ok {
-		if cachedItem.CreatedAt.Add(i.negativeCacheTTL).After(time.Now()) {
-			return cachedItem.IntrospectionResult.Clone(), nil
-		}
+		return cachedItem.IntrospectionResult.Clone(), nil
+	}
+
+	if cachedItem, ok := i.NegativeCache.Get(ctx, cacheKey); ok {
+		return cachedItem.IntrospectionResult.Clone(), nil
 	}
 
 	resultVal, err, _ := i.sfGroup.Do(string(cacheKey[:]), func() (interface{}, error) {
@@ -407,7 +388,7 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		result.GetClaims().ApplyScopeFilter(i.scopeFilter)
 		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result.Clone(), CreatedAt: time.Now()})
 		if err = i.validateClaims(result.GetClaims()); err != nil {
-			return nil, fmt.Errorf("validate claims: %w", err)
+			return nil, fmt.Errorf("validate claims of received introspection result: %w", err)
 		}
 		return result, nil
 	})
@@ -674,9 +655,7 @@ func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context,
 		unsafe.Slice(unsafe.StringData(issuerURL), len(issuerURL))) // nolint:gosec // prevent redundant slice copying
 
 	if c, ok := i.EndpointDiscoveryCache.Get(ctx, cacheKey); ok {
-		if c.CreatedAt.Add(i.endpointDiscoveryCacheTTL).After(time.Now()) {
-			return c.IntrospectionEndpoint, nil
-		}
+		return c.IntrospectionEndpoint, nil
 	}
 
 	logger := idputil.GetLoggerFromProvider(ctx, i.loggerProvider)
@@ -776,7 +755,7 @@ type IntrospectionCacheItem struct {
 }
 
 func makeIntrospectionClaimsCache(
-	opts IntrospectorCacheOpts, defaultMaxEntries int, promMetrics *lrucache.PrometheusMetrics,
+	opts IntrospectorCacheOpts, defaultMaxEntries int, defaultTTL time.Duration, promMetrics *lrucache.PrometheusMetrics,
 ) IntrospectionCache {
 	if !opts.Enabled {
 		return &disabledIntrospectionCache{}
@@ -784,8 +763,13 @@ func makeIntrospectionClaimsCache(
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = defaultMaxEntries
 	}
+	if opts.TTL == 0 {
+		opts.TTL = defaultTTL
+	}
 	promMetrics = promMetrics.MustCurryWith(prometheus.Labels{metrics.CacheLabelSize: strconv.Itoa(opts.MaxEntries)})
-	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionCacheItem](opts.MaxEntries, promMetrics) // error is always nil here
+	cacheOpts := lrucache.Options{DefaultTTL: opts.TTL}
+	cache, _ := lrucache.NewWithOpts[[sha256.Size]byte, IntrospectionCacheItem](
+		opts.MaxEntries, promMetrics, cacheOpts) // error is always nil here
 	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionCacheItem]{cache}
 }
 
@@ -821,8 +805,9 @@ func makeIntrospectionEndpointDiscoveryCache(
 	}
 	cacheMetrics := promMetrics.EndpointDiscoveryCache.MustCurryWith(
 		prometheus.Labels{metrics.CacheLabelSize: strconv.Itoa(opts.MaxEntries)})
-	cache, _ := lrucache.New[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem](
-		opts.MaxEntries, cacheMetrics) // error is always nil here
+	cacheOpts := lrucache.Options{DefaultTTL: opts.TTL}
+	cache, _ := lrucache.NewWithOpts[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem](
+		opts.MaxEntries, cacheMetrics, cacheOpts) // error is always nil here
 	return &IntrospectionLRUCache[[sha256.Size]byte, IntrospectionEndpointDiscoveryCacheItem]{cache}
 }
 
