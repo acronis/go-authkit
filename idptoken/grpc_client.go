@@ -165,10 +165,17 @@ func (c *GRPCClient) IntrospectToken(
 		c.setSessionID(sessionIDMeta[0])
 	}
 
-	result := c.resultTemplate
-	if result == nil {
+	// Create a new result instance for this introspection request.
+	// If a custom result template is configured, clone it to get a fresh instance.
+	// This is critical for thread-safety: without cloning, concurrent gRPC introspection
+	// calls would share the same resultTemplate instance, leading to data races.
+	var result IntrospectionResult
+	if c.resultTemplate != nil {
+		result = c.resultTemplate.Clone()
+	} else {
 		result = &DefaultIntrospectionResult{}
 	}
+
 	result.SetIsActive(resp.GetActive())
 	if !result.IsActive() {
 		return result, nil

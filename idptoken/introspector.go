@@ -369,10 +369,14 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 		if err := i.validateClaims(cachedItem.IntrospectionResult.GetClaims()); err != nil {
 			return nil, fmt.Errorf("validate claims of cached introspection result: %w", err)
 		}
+		// Clone the cached result to prevent data races. Without cloning, concurrent calls
+		// would receive the same cached instance, and modifications by one goroutine could
+		// affect other goroutines reading the same object.
 		return cachedItem.IntrospectionResult.Clone(), nil
 	}
 
 	if cachedItem, ok := i.NegativeCache.Get(ctx, cacheKey); ok {
+		// Clone the cached result for thread-safety (same reason as above).
 		return cachedItem.IntrospectionResult.Clone(), nil
 	}
 
@@ -382,11 +386,11 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 			return nil, err
 		}
 		if !result.IsActive() {
-			i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result.Clone(), CreatedAt: time.Now()})
+			i.NegativeCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result, CreatedAt: time.Now()})
 			return result, nil
 		}
 		result.GetClaims().ApplyScopeFilter(i.scopeFilter)
-		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result.Clone(), CreatedAt: time.Now()})
+		i.ClaimsCache.Add(ctx, cacheKey, IntrospectionCacheItem{IntrospectionResult: result, CreatedAt: time.Now()})
 		if err = i.validateClaims(result.GetClaims()); err != nil {
 			return nil, fmt.Errorf("validate claims of received introspection result: %w", err)
 		}
@@ -395,7 +399,10 @@ func (i *Introspector) IntrospectToken(ctx context.Context, token string) (Intro
 	if err != nil {
 		return nil, err // already wrapped
 	}
-	return resultVal.(IntrospectionResult), nil
+	// Clone the result before returning to ensure thread-safety.
+	// This prevents the caller from modifying the singleflight-shared result object,
+	// which could affect other concurrent callers waiting for the same singleflight operation.
+	return resultVal.(IntrospectionResult).Clone(), nil
 }
 
 // AddTrustedIssuer adds trusted issuer with specified name and URL.
@@ -633,6 +640,10 @@ func (i *Introspector) makeIntrospectFuncHTTP(introspectionEndpointURL string) i
 			return nil, unexpectedCodeErr
 		}
 
+		// Create a new result instance for this HTTP introspection request.
+		// If a custom result template is configured, clone it to get a fresh instance.
+		// This is critical for thread-safety: without cloning, concurrent HTTP introspection
+		// calls would share the same resultTemplate instance, leading to data races.
 		var res IntrospectionResult
 		if i.resultTemplate != nil {
 			res = i.resultTemplate.Clone()
