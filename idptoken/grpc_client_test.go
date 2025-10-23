@@ -348,6 +348,168 @@ func TestGRPCClient_IntrospectToken_CustomClaims(t *gotesting.T) {
 	require.Equal(t, 42, clonedCustomResult.CustomIntField)
 }
 
+// TestGRPCClient_IntrospectToken_ConcurrentCloning tests that concurrent
+// introspection calls don't cause data races with result template cloning.
+func TestGRPCClient_IntrospectToken_ConcurrentCloning(t *gotesting.T) {
+	const validAccessToken = "access-token-with-introspection-permission"
+	const numGoroutines = 100
+
+	opaqueToken := "opaque-token-" + uuid.NewString()
+	opaqueTokenScope := []jwt.AccessPolicy{{
+		TenantUUID:        uuid.NewString(),
+		ResourceNamespace: "account-server",
+		Role:              "admin",
+		ResourcePath:      "resource-" + uuid.NewString(),
+	}}
+	opaqueTokenRegClaims := jwtgo.RegisteredClaims{
+		ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+
+	jwtScopeToGRPC := func(jwtScope []jwt.AccessPolicy) []*pb.AccessTokenScope {
+		grpcScope := make([]*pb.AccessTokenScope, len(jwtScope))
+		for i, scope := range jwtScope {
+			grpcScope[i] = &pb.AccessTokenScope{
+				TenantUuid:        scope.TenantUUID,
+				ResourceNamespace: scope.ResourceNamespace,
+				RoleName:          scope.Role,
+				ResourcePath:      scope.ResourcePath,
+			}
+		}
+		return grpcScope
+	}
+
+	t.Run("custom result template", func(t *gotesting.T) {
+		grpcServerTokenIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+		grpcServerTokenIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+		grpcServerTokenIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
+			Active:           true,
+			TokenType:        idputil.TokenTypeBearer,
+			Aud:              opaqueTokenRegClaims.Audience,
+			Exp:              opaqueTokenRegClaims.ExpiresAt.Unix(),
+			Scope:            jwtScopeToGRPC(opaqueTokenScope),
+			CustomClaimsJson: `{"custom_string_field":"custom_value","custom_int_field":42}`,
+		}, nil)
+
+		grpcIDPSrv := idptest.NewGRPCServer(idptest.WithGRPCTokenIntrospector(grpcServerTokenIntrospector))
+		require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
+		defer func() { grpcIDPSrv.GracefulStop() }()
+
+		grpcClient, err := idptoken.NewGRPCClientWithOpts(
+			grpcIDPSrv.Addr(),
+			insecure.NewCredentials(),
+			idptoken.GRPCClientOpts{
+				ResultTemplate: &CustomIntrospectionResult{},
+			},
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, grpcClient.Close()) }()
+
+		// Run concurrent introspection requests
+		errChan := make(chan error, numGoroutines)
+		startCh := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func(index int) {
+				<-startCh // Wait for signal to start all goroutines simultaneously
+				result, introspectErr := grpcClient.IntrospectToken(context.Background(), opaqueToken, nil, validAccessToken)
+				if introspectErr != nil {
+					errChan <- introspectErr
+					return
+				}
+
+				customResult, ok := result.(*CustomIntrospectionResult)
+				if !ok {
+					errChan <- fmt.Errorf("goroutine %d: result should be of type CustomIntrospectionResult", index)
+					return
+				}
+
+				if customResult.CustomStringField != "custom_value" {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomStringField='custom_value', got '%s'",
+						index, customResult.CustomStringField)
+					return
+				}
+
+				if customResult.CustomIntField != 42 {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomIntField=42, got %d",
+						index, customResult.CustomIntField)
+					return
+				}
+
+				// Modify the result - this would cause a race if the same object is shared
+				customResult.CustomStringField = fmt.Sprintf("modified_by_goroutine_%d", index)
+				customResult.CustomIntField = index
+
+				errChan <- nil
+			}(i)
+		}
+
+		close(startCh) // Start all goroutines at once
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			err := <-errChan
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("default result template", func(t *gotesting.T) {
+		grpcServerTokenIntrospector := testing.NewGRPCServerTokenIntrospectorMock()
+		grpcServerTokenIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+		grpcServerTokenIntrospector.SetResultForToken(opaqueToken, &pb.IntrospectTokenResponse{
+			Active:    true,
+			TokenType: idputil.TokenTypeBearer,
+			Aud:       opaqueTokenRegClaims.Audience,
+			Exp:       opaqueTokenRegClaims.ExpiresAt.Unix(),
+			Scope:     jwtScopeToGRPC(opaqueTokenScope),
+		}, nil)
+
+		grpcIDPSrv := idptest.NewGRPCServer(idptest.WithGRPCTokenIntrospector(grpcServerTokenIntrospector))
+		require.NoError(t, grpcIDPSrv.StartAndWaitForReady(time.Second))
+		defer func() { grpcIDPSrv.GracefulStop() }()
+
+		grpcClient, err := idptoken.NewGRPCClient(grpcIDPSrv.Addr(), insecure.NewCredentials())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, grpcClient.Close()) }()
+
+		// Run concurrent introspection requests
+		errChan := make(chan error, numGoroutines)
+		startCh := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func(index int) {
+				<-startCh // Wait for signal to start all goroutines simultaneously
+				result, introspectErr := grpcClient.IntrospectToken(context.Background(), opaqueToken, nil, validAccessToken)
+				if introspectErr != nil {
+					errChan <- introspectErr
+					return
+				}
+
+				if !result.IsActive() {
+					errChan <- fmt.Errorf("goroutine %d: expected active token", index)
+					return
+				}
+
+				if result.GetTokenType() != idputil.TokenTypeBearer {
+					errChan <- fmt.Errorf("goroutine %d: expected token type %s, got %s",
+						index, idputil.TokenTypeBearer, result.GetTokenType())
+					return
+				}
+
+				// Modify the result - this would cause a race if the same object is shared
+				result.SetTokenType(fmt.Sprintf("modified_by_goroutine_%d", index))
+
+				errChan <- nil
+			}(i)
+		}
+
+		close(startCh) // Start all goroutines at once
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			err := <-errChan
+			require.NoError(t, err)
+		}
+	})
+}
+
 func TestGRPCClient_ExchangeToken(t *gotesting.T) {
 	tokenExpiresIn := time.Hour
 	tokenExpiresAt := time.Now().Add(time.Hour)

@@ -1187,3 +1187,270 @@ func TestIntrospector_IntrospectToken_Singleflight(t *gotesting.T) {
 		})
 	}
 }
+
+// TestIntrospector_IntrospectToken_ConcurrentCacheCloning tests that concurrent
+// introspection calls don't cause data races when cloning results from cache or using singleflight.
+func TestIntrospector_IntrospectToken_ConcurrentCloning(t *gotesting.T) {
+	const validAccessToken = "access-token-with-introspection-permission"
+	const numGoroutines = 100
+
+	serverIntrospector := testing.NewHTTPServerTokenIntrospectorMock()
+	serverIntrospector.SetAccessTokenForIntrospection(validAccessToken)
+
+	idpSrv := idptest.NewHTTPServer(idptest.WithHTTPTokenIntrospector(serverIntrospector))
+	require.NoError(t, idpSrv.StartAndWaitForReady(time.Second))
+	defer func() { _ = idpSrv.Shutdown(context.Background()) }()
+
+	t.Run("positive cache with custom result template", func(t *gotesting.T) {
+		// Setup test token with custom claims
+		validJWTScope := []jwt.AccessPolicy{{
+			TenantUUID:        uuid.NewString(),
+			ResourceNamespace: "account-server",
+			Role:              "account_viewer",
+			ResourcePath:      "resource-" + uuid.NewString(),
+		}}
+		validJWTRegClaims := jwtgo.RegisteredClaims{
+			Issuer:    idpSrv.URL(),
+			Audience:  jwtgo.ClaimStrings{"https://rs.example.com"},
+			Subject:   uuid.NewString(),
+			ID:        uuid.NewString(),
+			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+		}
+		validJWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims})
+
+		// Use custom introspection result
+		serverIntrospector.SetResultForToken(validJWT, &CustomIntrospectionResult{
+			Active:    true,
+			TokenType: idputil.TokenTypeBearer,
+			CustomClaims: CustomClaims{
+				DefaultClaims:     jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope},
+				CustomStringField: "test_value",
+				CustomIntField:    123,
+			},
+		}, nil)
+
+		// Create introspector with custom result template and caching enabled
+		introspector, err := idptoken.NewIntrospectorWithOpts(
+			idptest.NewSimpleTokenProvider(validAccessToken),
+			idptoken.IntrospectorOpts{
+				ResultTemplate: &CustomIntrospectionResult{},
+				ClaimsCache:    idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache:  idptoken.IntrospectorCacheOpts{Enabled: true},
+			},
+		)
+		require.NoError(t, err)
+		require.NoError(t, introspector.AddTrustedIssuerURL(idpSrv.URL()))
+
+		// Prime the cache with one call
+		firstResult, err := introspector.IntrospectToken(context.Background(), validJWT)
+		require.NoError(t, err)
+		require.True(t, firstResult.IsActive())
+
+		// Run concurrent introspection requests from cache
+		// Without the fix (cloning on cache retrieval), this would cause a data race
+		// because multiple goroutines would be reading/modifying the same cached result object
+		errChan := make(chan error, numGoroutines)
+		startCh := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func(index int) {
+				<-startCh // Wait for signal to start all goroutines simultaneously
+				result, introspectErr := introspector.IntrospectToken(context.Background(), validJWT)
+				if introspectErr != nil {
+					errChan <- introspectErr
+					return
+				}
+
+				// Verify the result is correct and properly isolated
+				customResult, ok := result.(*CustomIntrospectionResult)
+				if !ok {
+					errChan <- fmt.Errorf("goroutine %d: result should be of type CustomIntrospectionResult", index)
+					return
+				}
+
+				if customResult.CustomStringField != "test_value" {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomStringField='test_value', got '%s'",
+						index, customResult.CustomStringField)
+					return
+				}
+
+				if customResult.CustomIntField != 123 {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomIntField=123, got %d",
+						index, customResult.CustomIntField)
+					return
+				}
+
+				// Modify the result to ensure isolation (this should not affect other goroutines)
+				customResult.CustomStringField = "modified_value"
+				customResult.CustomIntField = 999
+
+				errChan <- nil
+			}(i)
+		}
+
+		close(startCh) // Start all goroutines at once
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			err := <-errChan
+			require.NoError(t, err)
+		}
+
+		// Verify that the modifications didn't affect the cached value or subsequent retrievals
+		verifyResult, err := introspector.IntrospectToken(context.Background(), validJWT)
+		require.NoError(t, err)
+		verifyCustomResult, ok := verifyResult.(*CustomIntrospectionResult)
+		require.True(t, ok)
+		require.Equal(t, "test_value", verifyCustomResult.CustomStringField)
+		require.Equal(t, 123, verifyCustomResult.CustomIntField)
+	})
+
+	t.Run("singleflight with custom result template", func(t *gotesting.T) {
+		// Setup test token with custom claims
+		validJWTScope := []jwt.AccessPolicy{{
+			TenantUUID:        uuid.NewString(),
+			ResourceNamespace: "account-server",
+			Role:              "account_viewer",
+			ResourcePath:      "resource-" + uuid.NewString(),
+		}}
+		validJWTRegClaims := jwtgo.RegisteredClaims{
+			Issuer:    idpSrv.URL(),
+			Audience:  jwtgo.ClaimStrings{"https://rs.example.com"},
+			Subject:   uuid.NewString(),
+			ID:        uuid.NewString(),
+			ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+		}
+		validJWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims})
+
+		// Use custom introspection result
+		serverIntrospector.SetResultForToken(validJWT, &CustomIntrospectionResult{
+			Active:    true,
+			TokenType: idputil.TokenTypeBearer,
+			CustomClaims: CustomClaims{
+				DefaultClaims:     jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope},
+				CustomStringField: "singleflight_value",
+				CustomIntField:    456,
+			},
+		}, nil)
+
+		// Create introspector with caching DISABLED to test singleflight path
+		introspector, err := idptoken.NewIntrospectorWithOpts(
+			idptest.NewSimpleTokenProvider(validAccessToken),
+			idptoken.IntrospectorOpts{
+				ResultTemplate: &CustomIntrospectionResult{},
+				ClaimsCache:    idptoken.IntrospectorCacheOpts{Enabled: false},
+				NegativeCache:  idptoken.IntrospectorCacheOpts{Enabled: false},
+			},
+		)
+		require.NoError(t, err)
+		require.NoError(t, introspector.AddTrustedIssuerURL(idpSrv.URL()))
+
+		// Run concurrent introspection requests hitting singleflight
+		// Without the fix (cloning on singleflight return), this would cause a data race
+		// because multiple goroutines would be reading/modifying the same singleflight result object
+		errChan := make(chan error, numGoroutines)
+		startCh := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func(index int) {
+				<-startCh // Wait for signal to start all goroutines simultaneously
+				result, introspectErr := introspector.IntrospectToken(context.Background(), validJWT)
+				if introspectErr != nil {
+					errChan <- introspectErr
+					return
+				}
+
+				// Verify the result is correct and properly isolated
+				customResult, ok := result.(*CustomIntrospectionResult)
+				if !ok {
+					errChan <- fmt.Errorf("goroutine %d: result should be of type CustomIntrospectionResult", index)
+					return
+				}
+
+				if customResult.CustomStringField != "singleflight_value" {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomStringField='singleflight_value', got '%s'",
+						index, customResult.CustomStringField)
+					return
+				}
+
+				if customResult.CustomIntField != 456 {
+					errChan <- fmt.Errorf("goroutine %d: expected CustomIntField=456, got %d",
+						index, customResult.CustomIntField)
+					return
+				}
+
+				// Modify the result to ensure isolation (this should not affect other goroutines)
+				customResult.CustomStringField = fmt.Sprintf("modified_by_%d", index)
+				customResult.CustomIntField = index
+
+				errChan <- nil
+			}(i)
+		}
+
+		close(startCh) // Start all goroutines at once
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			err := <-errChan
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("negative cache", func(t *gotesting.T) {
+		// Setup an inactive token
+		inactiveJWT := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{
+			RegisteredClaims: jwtgo.RegisteredClaims{
+				Issuer:  idpSrv.URL(),
+				Subject: uuid.NewString(),
+			},
+		})
+
+		serverIntrospector.SetResultForToken(inactiveJWT, &idptoken.DefaultIntrospectionResult{
+			Active: false,
+		}, nil)
+
+		// Create introspector with negative caching enabled
+		introspector, err := idptoken.NewIntrospectorWithOpts(
+			idptest.NewSimpleTokenProvider(validAccessToken),
+			idptoken.IntrospectorOpts{
+				ClaimsCache:   idptoken.IntrospectorCacheOpts{Enabled: true},
+				NegativeCache: idptoken.IntrospectorCacheOpts{Enabled: true},
+			},
+		)
+		require.NoError(t, err)
+		require.NoError(t, introspector.AddTrustedIssuerURL(idpSrv.URL()))
+
+		// Prime the negative cache with one call
+		firstResult, err := introspector.IntrospectToken(context.Background(), inactiveJWT)
+		require.NoError(t, err)
+		require.False(t, firstResult.IsActive())
+
+		// Run concurrent introspection requests
+		errChan := make(chan error, numGoroutines)
+		startCh := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func(index int) {
+				<-startCh // Wait for signal to start all goroutines simultaneously
+				result, introspectErr := introspector.IntrospectToken(context.Background(), inactiveJWT)
+				if introspectErr != nil {
+					errChan <- introspectErr
+					return
+				}
+
+				// Verify the result is correctly inactive
+				if result.IsActive() {
+					errChan <- fmt.Errorf("goroutine %d: expected inactive token", index)
+					return
+				}
+
+				errChan <- nil
+			}(i)
+		}
+
+		close(startCh) // Start all goroutines at once
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			err := <-errChan
+			require.NoError(t, err)
+		}
+	})
+}
