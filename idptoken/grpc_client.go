@@ -40,6 +40,19 @@ const (
 	grpcMetaSessionID     = "x-session-id"
 )
 
+// GRPCClientLoadBalancingPolicy represents a gRPC client-side load balancing policy.
+type GRPCClientLoadBalancingPolicy string
+
+const (
+	// GRPCClientLoadBalancingPolicyRoundRobin distributes requests evenly across all available endpoints.
+	// This is the recommended policy for Kubernetes environments to avoid sticky connections.
+	GRPCClientLoadBalancingPolicyRoundRobin GRPCClientLoadBalancingPolicy = "round_robin"
+
+	// GRPCClientLoadBalancingPolicyPickFirst attempts to connect to the first address and uses it for all RPCs.
+	// Falls back to the next address only if the connection fails.
+	GRPCClientLoadBalancingPolicyPickFirst GRPCClientLoadBalancingPolicy = "pick_first"
+)
+
 // GRPCClientOpts contains options for the GRPCClient.
 type GRPCClientOpts struct {
 	// LoggerProvider is a function that provides a logger for the client.
@@ -63,6 +76,19 @@ type GRPCClientOpts struct {
 	// that will be used instead of DefaultIntrospectionResult for unmarshalling introspection response.
 	// It must implement IntrospectionResult interface.
 	ResultTemplate IntrospectionResult
+
+	// LoadBalancingPolicy specifies the load balancing policy for gRPC client-side load balancing.
+	// Use GRPCClientLoadBalancingPolicyRoundRobin (default) or GRPCClientLoadBalancingPolicyPickFirst.
+	// When set, enables client-side load balancing which is essential for proper load distribution
+	// in Kubernetes environments where gRPC's HTTP/2 connections would otherwise be sticky to a single pod.
+	// Leave empty to use GRPCClientLoadBalancingPolicyRoundRobin as default.
+	LoadBalancingPolicy GRPCClientLoadBalancingPolicy
+
+	// DisableLoadBalancing disables client-side load balancing when set to true.
+	// By default, load balancing is enabled with round_robin policy.
+	// Set this to true only if you need to maintain backward compatibility or have a specific reason
+	// to connect to a single endpoint without load balancing.
+	DisableLoadBalancing bool
 }
 
 // GRPCClient is a client for the IDP token service that uses gRPC.
@@ -74,6 +100,38 @@ type GRPCClient struct {
 	requestIDProvider func(ctx context.Context) string
 	resultTemplate    IntrospectionResult
 	sessionID         atomic.Value
+}
+
+// grpcServiceConfig represents the gRPC service configuration for client-side load balancing.
+// This structure is marshaled to JSON and passed to grpc.WithDefaultServiceConfig.
+type grpcServiceConfig struct {
+	LoadBalancingConfig []map[string]interface{} `json:"loadBalancingConfig,omitempty"`
+}
+
+// buildGRPCServiceConfig creates a gRPC service configuration JSON string based on the provided options.
+// Returns empty string if load balancing is disabled.
+func buildGRPCServiceConfig(opts GRPCClientOpts) (string, error) {
+	if opts.DisableLoadBalancing {
+		return "", nil
+	}
+
+	lbPolicy := opts.LoadBalancingPolicy
+	if lbPolicy == "" {
+		lbPolicy = GRPCClientLoadBalancingPolicyRoundRobin
+	}
+
+	svcCfg := grpcServiceConfig{
+		LoadBalancingConfig: []map[string]interface{}{
+			{string(lbPolicy): map[string]interface{}{}},
+		},
+	}
+
+	serviceConfigJSON, err := json.Marshal(svcCfg)
+	if err != nil {
+		return "", fmt.Errorf("marshal service config: %w", err)
+	}
+
+	return string(serviceConfigJSON), nil
 }
 
 // NewGRPCClient creates a new GRPCClient instance that communicates with the IDP token service.
@@ -91,12 +149,23 @@ func NewGRPCClientWithOpts(
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = DefaultGRPCClientRequestTimeout
 	}
-	conn, err := grpc.NewClient(target,
+
+	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithStatsHandler(&statsHandler{loggerProvider: opts.LoggerProvider}),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithUserAgent(opts.UserAgent),
-	)
+	}
+
+	serviceConfig, err := buildGRPCServiceConfig(opts)
+	if err != nil {
+		return nil, fmt.Errorf("build service config: %w", err)
+	}
+	if serviceConfig != "" {
+		dialOpts = append(dialOpts, grpc.WithDefaultServiceConfig(serviceConfig))
+	}
+
+	conn, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial to %q: %w", target, err)
 	}
