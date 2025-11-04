@@ -26,7 +26,7 @@ type KeysProvider interface {
 // Unlike KeysProvider, it supports caching of obtained keys.
 type CachingKeysProvider interface {
 	KeysProvider
-	InvalidateCacheIfNeeded(ctx context.Context, issuer string) error
+	InvalidateCacheIfPossible(ctx context.Context, issuer string) (invalidated bool, err error)
 }
 
 // ParserOpts additional options for parser.
@@ -151,10 +151,14 @@ func (p *Parser) Parse(ctx context.Context, token string) (Claims, error) {
 		if !issuerURLFound {
 			return nil, err
 		}
-		if err = cachingKeysProvider.InvalidateCacheIfNeeded(ctx, issuerURL); err != nil {
+		keysInvalidated, keysErr := cachingKeysProvider.InvalidateCacheIfPossible(ctx, issuerURL)
+		if keysErr != nil {
 			idputil.GetLoggerFromProvider(ctx, p.loggerProvider).Error(
 				fmt.Sprintf("keys provider invalidating cache error for issuer %q", issuerURL),
-				log.Error(err))
+				log.Error(keysErr))
+			return nil, err // original error is more important
+		}
+		if !keysInvalidated {
 			return nil, err
 		}
 
