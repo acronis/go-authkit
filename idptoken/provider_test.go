@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -431,6 +433,354 @@ func TestProviderWithCache(t *testing.T) {
 		credentials.ClientSecret = "evennewersecret"
 		provider.RegisterSource(credentials)
 		require.Equal(t, 0, len(tokenCache.Keys()), "updating with a new secret does reset the cache")
+	})
+}
+
+func TestProviderConcurrency(t *testing.T) {
+	t.Run("concurrent GetToken calls with same parameters", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewProvider(idptoken.Source{
+			ClientID:     testClientID,
+			ClientSecret: uuid.NewString(),
+			URL:          server.URL(),
+		})
+
+		const numGoroutines = 100
+		var wg sync.WaitGroup
+		tokens := make([]string, numGoroutines)
+		errors := make([]error, numGoroutines)
+
+		// All goroutines request the same token simultaneously
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				token, err := provider.GetToken(context.Background(), testClientID, server.URL(), "tenants:read")
+				tokens[idx] = token
+				errors[idx] = err
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All should succeed
+		for i := 0; i < numGoroutines; i++ {
+			require.NoError(t, errors[i], "goroutine %d failed", i)
+			require.NotEmpty(t, tokens[i], "goroutine %d got empty token", i)
+		}
+
+		// All should get the same token (singleflight should deduplicate)
+		firstToken := tokens[0]
+		for i := 1; i < numGoroutines; i++ {
+			require.Equal(t, firstToken, tokens[i], "token mismatch at index %d", i)
+		}
+	})
+
+	t.Run("concurrent GetToken calls with different parameters", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewProvider(idptoken.Source{
+			ClientID:     testClientID,
+			ClientSecret: uuid.NewString(),
+			URL:          server.URL(),
+		})
+
+		scopes := []string{"scope1", "scope2", "scope3", "scope4", "scope5"}
+		const goroutinesPerScope = 20
+		var wg sync.WaitGroup
+		tokens := make(map[string][]string)
+		var tokensMu sync.Mutex
+		errors := make([]error, 0)
+		var errorsMu sync.Mutex
+
+		// Multiple goroutines request different scopes simultaneously
+		for _, scope := range scopes {
+			for i := 0; i < goroutinesPerScope; i++ {
+				wg.Add(1)
+				go func(s string) {
+					defer wg.Done()
+					token, err := provider.GetToken(context.Background(), testClientID, server.URL(), s)
+					if err != nil {
+						errorsMu.Lock()
+						errors = append(errors, err)
+						errorsMu.Unlock()
+						return
+					}
+					tokensMu.Lock()
+					tokens[s] = append(tokens[s], token)
+					tokensMu.Unlock()
+				}(scope)
+			}
+		}
+
+		wg.Wait()
+
+		// All should succeed
+		require.Empty(t, errors, "some goroutines failed")
+		require.Equal(t, len(scopes), len(tokens), "not all scopes were requested")
+
+		// Tokens for the same scope should be identical
+		for scope, scopeTokens := range tokens {
+			require.Equal(t, goroutinesPerScope, len(scopeTokens), "missing tokens for scope %s", scope)
+			firstToken := scopeTokens[0]
+			for i, token := range scopeTokens {
+				require.Equal(t, firstToken, token, "token mismatch for scope %s at index %d", scope, i)
+			}
+		}
+	})
+
+	t.Run("concurrent RegisterSource calls", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewMultiSourceProvider(nil)
+
+		const numGoroutines = 50
+		var wg sync.WaitGroup
+
+		// Multiple goroutines register sources simultaneously
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				source := idptoken.Source{
+					ClientID:     fmt.Sprintf("client-%d", idx),
+					ClientSecret: fmt.Sprintf("secret-%d", idx),
+					URL:          server.URL(),
+				}
+				provider.RegisterSource(source)
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All sources should be registered successfully
+		// Try to get tokens for all registered sources
+		for i := 0; i < numGoroutines; i++ {
+			clientID := fmt.Sprintf("client-%d", i)
+			_, err := provider.GetToken(context.Background(), clientID, server.URL(), "scope")
+			require.NoError(t, err, "failed to get token for client-%d", i)
+		}
+	})
+
+	t.Run("concurrent GetToken and Invalidate", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewProvider(idptoken.Source{
+			ClientID:     testClientID,
+			ClientSecret: uuid.NewString(),
+			URL:          server.URL(),
+		})
+
+		const numGoroutines = 50
+		var wg sync.WaitGroup
+		successCount := int32(0)
+
+		// Some goroutines get tokens while others invalidate
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				if idx%5 == 0 {
+					provider.Invalidate()
+				}
+				_, err := provider.GetToken(context.Background(), testClientID, server.URL(), "tenants:read")
+				if err == nil {
+					atomic.AddInt32(&successCount, 1)
+				}
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All GetToken calls should succeed
+		require.Equal(t, int(successCount), numGoroutines, "some GetToken calls failed")
+	})
+
+	t.Run("concurrent GetToken with refresh loop", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 3 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewProviderWithOpts(idptoken.Source{
+			ClientID:     testClientID,
+			ClientSecret: uuid.NewString(),
+			URL:          server.URL(),
+		}, idptoken.ProviderOpts{
+			MinRefreshPeriod: 500 * time.Millisecond,
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go provider.RefreshTokensPeriodically(ctx)
+
+		const numGoroutines = 30
+		const duration = 5 * time.Second
+		var wg sync.WaitGroup
+		stopTime := time.Now().Add(duration)
+
+		// Continuously request tokens while refresh loop is running
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				for time.Now().Before(stopTime) {
+					_, err := provider.GetToken(context.Background(), testClientID, server.URL(), "tenants:read")
+					if err != nil {
+						t.Logf("goroutine %d got error: %v", idx, err)
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("concurrent GetTokenWithHeaders", func(t *testing.T) {
+		server := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server.StartAndWaitForReady(time.Second))
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewProvider(idptoken.Source{
+			ClientID:     testClientID,
+			ClientSecret: uuid.NewString(),
+			URL:          server.URL(),
+		})
+
+		const numGoroutines = 50
+		var wg sync.WaitGroup
+		errors := make([]error, numGoroutines)
+
+		// Multiple goroutines request tokens with different headers
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				headers := map[string]string{
+					"X-Request-ID": fmt.Sprintf("request-%d", idx),
+				}
+				_, err := provider.GetTokenWithHeaders(context.Background(), headers, "tenants:read")
+				errors[idx] = err
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All should succeed
+		for i := 0; i < numGoroutines; i++ {
+			require.NoError(t, errors[i], "goroutine %d failed", i)
+		}
+	})
+
+	t.Run("concurrent cache operations", func(t *testing.T) {
+		cache := idptoken.NewInMemoryTokenCache()
+
+		const numGoroutines = 100
+		var wg sync.WaitGroup
+
+		// Mix of Put, Get, Delete, Keys, GetAll operations
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				key := fmt.Sprintf("key-%d", idx%10) // Reuse some keys
+
+				// Put
+				details := &idptoken.TokenDetails{}
+				cache.Put(key, details)
+
+				// Get
+				_ = cache.Get(key)
+
+				// Keys
+				_ = cache.Keys()
+
+				// GetAll
+				_ = cache.GetAll()
+
+				// Delete some
+				if idx%3 == 0 {
+					cache.Delete(key)
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("concurrent multi-source access", func(t *testing.T) {
+		server1 := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+		)
+		require.NoError(t, server1.StartAndWaitForReady(time.Second))
+		defer func() { _ = server1.Shutdown(context.Background()) }()
+
+		server2 := idptest.NewHTTPServer(
+			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
+			idptest.WithHTTPAddress(":8082"),
+		)
+		require.NoError(t, server2.StartAndWaitForReady(time.Second))
+		defer func() { _ = server2.Shutdown(context.Background()) }()
+
+		provider := idptoken.NewMultiSourceProvider([]idptoken.Source{
+			{
+				ClientID:     "client1",
+				ClientSecret: uuid.NewString(),
+				URL:          server1.URL(),
+			},
+			{
+				ClientID:     "client2",
+				ClientSecret: uuid.NewString(),
+				URL:          server2.URL(),
+			},
+		})
+
+		const numGoroutines = 100
+		var wg sync.WaitGroup
+		errors := make([]error, numGoroutines)
+
+		// Goroutines randomly access different sources
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				if idx%2 == 0 {
+					_, err := provider.GetToken(context.Background(), "client1", server1.URL(), "scope1")
+					errors[idx] = err
+				} else {
+					_, err := provider.GetToken(context.Background(), "client2", server2.URL(), "scope2")
+					errors[idx] = err
+				}
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All should succeed
+		for i := 0; i < numGoroutines; i++ {
+			require.NoError(t, errors[i], "goroutine %d failed", i)
+		}
 	})
 }
 

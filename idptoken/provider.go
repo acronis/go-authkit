@@ -50,11 +50,16 @@ func (e *UnexpectedIDPResponseError) Error() string {
 
 // tokenData represents API-related token information
 type tokenData struct {
-	Data     string
-	ClientID string
-	issueURL string
-	Scope    []string
-	Expires  time.Time
+	Data           string
+	ClientID       string
+	tokenURL       string
+	RequestedScope []string
+	CustomHeaders  map[string]string
+	Expires        time.Time
+}
+
+func (td *tokenData) cacheKey() string {
+	return keyForCache(td.ClientID, td.tokenURL, td.RequestedScope)
 }
 
 // Source serves to provide auth source information to MultiSourceProvider and Provider
@@ -68,12 +73,11 @@ var zeroTime = time.Time{}
 
 // TokenDetails represents the data to be stored in TokenCache
 type TokenDetails struct {
-	token          tokenData
-	requestedScope []string
-	sourceURL      string
-	issued         time.Time
-	nextRefresh    time.Time
-	invalidation   time.Time
+	token        tokenData
+	issuerURL    string
+	issued       time.Time
+	nextRefresh  time.Time
+	invalidation time.Time
 }
 
 // TokenCache is a cache entry used to store TokenDetails based on a string key
@@ -92,6 +96,9 @@ type TokenCache interface {
 
 	// Keys returns all keys from the cache.
 	Keys() []string
+
+	// GetAll returns all key-value pairs from the cache.
+	GetAll() map[string]*TokenDetails
 }
 
 type InMemoryTokenCache struct {
@@ -141,9 +148,20 @@ func (c *InMemoryTokenCache) ClearAll() {
 	c.items = make(map[string]*TokenDetails)
 }
 
+func (c *InMemoryTokenCache) GetAll() map[string]*TokenDetails {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make(map[string]*TokenDetails, len(c.items))
+	for k, v := range c.items {
+		result[k] = v
+	}
+	return result
+}
+
 // MultiSourceProvider is a caching token provider for multiple datacenters and clients
 type MultiSourceProvider struct {
-	tokenIssuers map[string]*oauth2Issuer
+	tokenIssuersMu sync.RWMutex
+	tokenIssuers   map[string]*oauth2Issuer
 
 	rescheduleSignal chan struct{}
 	minRefreshPeriod time.Duration
@@ -155,8 +173,7 @@ type MultiSourceProvider struct {
 	customHeaders map[string]string
 	sfGroup       singleflight.Group
 
-	nextRefreshMu sync.RWMutex
-	nextRefresh   time.Time
+	nextRefresh atomic.Value // time.Time
 }
 
 // NewMultiSourceProvider returns a new instance of MultiSourceProvider with default settings
@@ -168,7 +185,6 @@ func NewMultiSourceProvider(sources []Source) *MultiSourceProvider {
 func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiSourceProvider {
 	p := MultiSourceProvider{
 		rescheduleSignal: make(chan struct{}, 1),
-		nextRefresh:      zeroTime,
 		minRefreshPeriod: opts.MinRefreshPeriod,
 		logger:           idputil.PrepareLogger(opts.Logger),
 		tokenIssuers:     make(map[string]*oauth2Issuer),
@@ -177,6 +193,7 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 		cache:            opts.CustomCacheInstance,
 		httpClient:       opts.HTTPClient,
 	}
+	p.nextRefresh.Store(zeroTime)
 
 	if p.minRefreshPeriod == 0 {
 		p.minRefreshPeriod = defaultMinRefreshPeriod
@@ -198,15 +215,19 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 
 // RegisterSource allows registering a new Source into MultiSourceProvider
 func (p *MultiSourceProvider) RegisterSource(source Source) {
+	p.tokenIssuersMu.Lock()
+	defer p.tokenIssuersMu.Unlock()
+
 	key := keyForIssuer(source.ClientID, source.URL)
 	if iss, found := p.tokenIssuers[key]; found {
-		if iss.clientSecret != source.ClientSecret {
-			iss.clientSecret = source.ClientSecret
+		if iss.loadClientSecret() != source.ClientSecret {
+			iss.storeClientSecret(source.ClientSecret)
 			p.cache.ClearAll()
 		}
+		return
 	}
 	newIssuer := p.newOAuth2Issuer(source.URL, source.ClientID, source.ClientSecret)
-	p.tokenIssuers[keyForIssuer(source.ClientID, source.URL)] = newIssuer
+	p.tokenIssuers[key] = newIssuer
 }
 
 // GetToken returns raw token for `clientID`, `sourceURL` and `scope`
@@ -226,7 +247,7 @@ func (p *MultiSourceProvider) GetTokenWithHeaders(
 // Invalidate fully invalidates all tokens cache
 func (p *MultiSourceProvider) Invalidate() {
 	p.cache.ClearAll()
-	p.setNextRefreshSafe(zeroTime)
+	p.setNextRefresh(zeroTime)
 }
 
 // RefreshTokensPeriodically starts a goroutine which refreshes tokens
@@ -234,64 +255,60 @@ func (p *MultiSourceProvider) RefreshTokensPeriodically(ctx context.Context) {
 	p.refreshLoop(ctx)
 }
 
-func (p *MultiSourceProvider) issueToken(
-	ctx context.Context, clientID, sourceURL string, customHeaders map[string]string, scope []string,
+// issueToken issues a new token from the IDP and caches it.
+// The scope parameter must be pre-sorted (uniqAndSort applied by caller).
+func (p *MultiSourceProvider) issueTokenAndCache(
+	ctx context.Context, issuer *oauth2Issuer, headersProvider func() map[string]string, sortedScope []string, key string,
 ) (tokenData, error) {
-	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
-
-	if !found {
-		return tokenData{}, ErrSourceNotRegistered
-	}
-
-	headers := make(map[string]string)
-	for k := range p.customHeaders {
-		headers[k] = p.customHeaders[k]
-	}
-	for k := range customHeaders {
-		headers[k] = customHeaders[k]
-	}
-
-	_, errEns, _ := p.sfGroup.Do(keyForIssuer(clientID, sourceURL), func() (interface{}, error) {
-		return nil, issuer.ensureTokenURL(ctx, headers)
-	})
-	if errEns != nil {
-		p.logger.Error(fmt.Sprintf("(%s, %s): ensure issuer URL", sourceURL, clientID), log.Error(errEns))
-		return tokenData{}, errEns
-	}
-
-	sortedScope := uniqAndSort(scope)
-	key := keyForCache(clientID, issuer.loadTokenURL(), sortedScope)
-	token, err, _ := p.sfGroup.Do(key, func() (interface{}, error) {
-		result, issErr := issuer.issueToken(ctx, headers, sortedScope)
-		p.cacheToken(result, sourceURL)
-		return result, issErr
+	v, err, _ := p.sfGroup.Do(key, func() (interface{}, error) {
+		var token tokenData
+		var err error
+		if token, err = p.getCachedTokenAndValidate(key); err == nil {
+			return token, nil
+		}
+		if token, err = issuer.issueToken(ctx, headersProvider(), sortedScope); err != nil {
+			return tokenData{}, err
+		}
+		p.cacheToken(token, issuer.baseURL)
+		return token, nil
 	})
 	if err != nil {
-		p.logger.Error(fmt.Sprintf("(%s, %s): issuing token", issuer.loadTokenURL(), clientID), log.Error(err))
+		p.logger.Error(fmt.Sprintf("(%s, %s): issuing token", issuer.loadTokenURL(), issuer.clientID), log.Error(err))
 		return tokenData{}, err
 	}
-
-	return token.(tokenData), nil
+	return v.(tokenData), nil
 }
 
 func (p *MultiSourceProvider) ensureToken(
 	ctx context.Context, clientID, sourceURL string, customHeaders map[string]string, scope []string,
 ) (string, error) {
-	token, err := p.getCachedOrInvalidate(clientID, sourceURL, scope)
-	if err == nil {
+	p.tokenIssuersMu.RLock()
+	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
+	p.tokenIssuersMu.RUnlock()
+	if !found {
+		return "", ErrSourceNotRegistered
+	}
+
+	headersProvider := mergedHeaders(p.customHeaders, customHeaders)
+
+	tokenURL, err := issuer.ensureTokenURL(ctx, headersProvider)
+	if err != nil {
+		return "", err
+	}
+
+	sortedScope := uniqAndSort(scope)
+	tokenKey := keyForCache(clientID, tokenURL, sortedScope)
+	var token tokenData
+	if token, err = p.getCachedTokenAndValidate(tokenKey); err == nil {
 		return token.Data, nil
 	}
-	p.logger.Infof("(%s, %s): could not get token from cache: %v", sourceURL, clientID, err.Error())
-
-	token, err = p.issueToken(ctx, clientID, sourceURL, customHeaders, scope)
-
-	if err != nil {
+	if token, err = p.issueTokenAndCache(ctx, issuer, headersProvider, sortedScope, tokenKey); err != nil {
 		return "", err
 	}
 	return token.Data, nil
 }
 
-func (p *MultiSourceProvider) cacheToken(token tokenData, sourceURL string) {
+func (p *MultiSourceProvider) cacheToken(token tokenData, issuerURL string) {
 	issued := time.Now().UTC()
 	randInt, err := rand.Int(rand.Reader, big.NewInt(expiryDeltaMaxOffset))
 	if err != nil {
@@ -309,17 +326,17 @@ func (p *MultiSourceProvider) cacheToken(token tokenData, sourceURL string) {
 	invalidation := issued.Add(realExpiration)
 	details := &TokenDetails{
 		token:        token,
+		issuerURL:    issuerURL,
 		issued:       issued,
 		nextRefresh:  nextRefresh,
 		invalidation: invalidation,
-		sourceURL:    sourceURL,
 	}
 
-	key := keyForCache(token.ClientID, token.issueURL, uniqAndSort(token.Scope))
-	p.cache.Put(key, details)
-	pNextRefresh := p.getNextRefreshSafe()
-	if pNextRefresh == zeroTime || nextRefresh.UnixNano() <= pNextRefresh.UnixNano() {
-		p.setNextRefreshSafe(nextRefresh)
+	p.cache.Put(token.cacheKey(), details)
+
+	// Update next refresh time if needed and signal refresh loop
+	if pNextRefresh := p.getNextRefresh(); pNextRefresh == zeroTime || nextRefresh.UnixNano() <= pNextRefresh.UnixNano() {
+		p.setNextRefresh(nextRefresh)
 		select {
 		case p.rescheduleSignal <- struct{}{}:
 		default:
@@ -327,47 +344,35 @@ func (p *MultiSourceProvider) cacheToken(token tokenData, sourceURL string) {
 	}
 }
 
-func (p *MultiSourceProvider) getCachedOrInvalidate(clientID, sourceURL string, scope []string) (tokenData, error) {
-	now := time.Now().UnixNano()
-	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
-	if !found {
-		return tokenData{}, fmt.Errorf("(%s, %s): not registered", sourceURL, clientID)
-	}
-	if issuer.loadTokenURL() == "" {
-		return tokenData{}, fmt.Errorf("(%s, %s): issuer URL not acquired", sourceURL, clientID)
-	}
-
-	key := keyForCache(clientID, issuer.loadTokenURL(), uniqAndSort(scope))
+// getCachedTokenAndValidate retrieves a cached token or returns an error if invalid.
+// The scope parameter must be pre-sorted (uniqAndSort applied by caller).
+func (p *MultiSourceProvider) getCachedTokenAndValidate(key string) (tokenData, error) {
 	details := p.cache.Get(key)
 	if details == nil {
 		return tokenData{}, errors.New("token not found in cache")
 	}
+	now := time.Now().UnixNano()
 	if details.token.Expires.UnixNano() < now {
-		p.cache.Delete(key)
 		return tokenData{}, errors.New("token is expired")
 	}
 	if details.invalidation.UnixNano() < now {
-		p.cache.Delete(key)
 		return tokenData{}, errors.New("token needs to be refreshed")
 	}
 	if details.issued.UnixNano() > now {
-		p.cache.Delete(key)
 		return tokenData{}, errors.New("token's issued time is invalid")
 	}
 	return details.token, nil
 }
 
-func (p *MultiSourceProvider) setNextRefreshSafe(nextRefresh time.Time) {
-	p.nextRefreshMu.Lock()
-	p.nextRefresh = nextRefresh
-	p.nextRefreshMu.Unlock()
+func (p *MultiSourceProvider) setNextRefresh(nextRefresh time.Time) {
+	p.nextRefresh.Store(nextRefresh)
 }
 
-func (p *MultiSourceProvider) getNextRefreshSafe() time.Time {
-	p.nextRefreshMu.RLock()
-	nextRefresh := p.nextRefresh
-	p.nextRefreshMu.RUnlock()
-	return nextRefresh
+func (p *MultiSourceProvider) getNextRefresh() time.Time {
+	if v := p.nextRefresh.Load(); v != nil {
+		return v.(time.Time)
+	}
+	return zeroTime
 }
 
 func (p *MultiSourceProvider) refreshTokens(ctx context.Context) {
@@ -375,8 +380,8 @@ func (p *MultiSourceProvider) refreshTokens(ctx context.Context) {
 
 	resultMap := make(map[*TokenDetails]struct{})
 	nextRefresh := zeroTime
-	for _, key := range p.cache.Keys() {
-		details := p.cache.Get(key)
+	allTokens := p.cache.GetAll()
+	for _, details := range allTokens {
 		if details == nil {
 			continue
 		}
@@ -391,18 +396,26 @@ func (p *MultiSourceProvider) refreshTokens(ctx context.Context) {
 			nextRefresh = details.nextRefresh
 		}
 	}
-	p.setNextRefreshSafe(nextRefresh)
+	p.setNextRefresh(nextRefresh)
 	toRefresh := make([]*TokenDetails, 0, len(resultMap))
 	for token := range resultMap {
 		toRefresh = append(toRefresh, token)
 	}
 
 	for _, details := range toRefresh {
-		_, err := p.issueToken(ctx, details.token.ClientID, details.sourceURL, nil, details.requestedScope)
+		p.tokenIssuersMu.RLock()
+		issuer, found := p.tokenIssuers[keyForIssuer(details.token.ClientID, details.issuerURL)]
+		p.tokenIssuersMu.RUnlock()
+		if !found {
+			continue
+		}
+		headersProvider := func() map[string]string { return details.token.CustomHeaders }
+		tokenKey := details.token.cacheKey()
+		_, err := p.issueTokenAndCache(ctx, issuer, headersProvider, details.token.RequestedScope, tokenKey)
 		if err != nil {
-			p.setNextRefreshSafe(now)
+			p.setNextRefresh(now)
 			p.logger.Error(
-				fmt.Sprintf("(%s, %s): refresh error", details.sourceURL, details.token.ClientID), log.Error(err),
+				fmt.Sprintf("(%s, %s): refresh error", details.issuerURL, details.token.ClientID), log.Error(err),
 			)
 		}
 	}
@@ -417,7 +430,7 @@ func (p *MultiSourceProvider) refreshLoop(ctx context.Context) {
 	lastRefresh := time.Now().UTC()
 	currentRefresh := zeroTime
 	scheduleNext := func() {
-		nextRefresh := p.getNextRefreshSafe()
+		nextRefresh := p.getNextRefresh()
 
 		currentRefresh = nextRefresh
 		if nextRefresh == zeroTime {
@@ -442,7 +455,7 @@ func (p *MultiSourceProvider) refreshLoop(ctx context.Context) {
 			p.refreshTokens(ctx)
 			scheduleNext()
 		case <-p.rescheduleSignal:
-			nextRefresh := p.getNextRefreshSafe()
+			nextRefresh := p.getNextRefresh()
 
 			if currentRefresh != nextRefresh {
 				if !stopped && !t.Stop() {
@@ -462,6 +475,25 @@ func (p *MultiSourceProvider) refreshLoop(ctx context.Context) {
 			}
 			return
 		}
+	}
+}
+
+func mergedHeaders(headers1, headers2 map[string]string) func() map[string]string {
+	return func() map[string]string {
+		if len(headers1) == 0 {
+			return headers2
+		}
+		if len(headers2) == 0 {
+			return headers1
+		}
+		headers := make(map[string]string, len(headers1)+len(headers2))
+		for k, v := range headers1 {
+			headers[k] = v
+		}
+		for k, v := range headers2 {
+			headers[k] = v
+		}
+		return headers
 	}
 }
 
@@ -509,9 +541,10 @@ func (mp *Provider) Invalidate() {
 }
 
 type oauth2Issuer struct {
+	mu           sync.Mutex
 	baseURL      string
 	clientID     string
-	clientSecret string
+	clientSecret atomic.Value
 	httpClient   *http.Client
 	logger       log.FieldLogger
 	tokenURL     atomic.Value
@@ -519,14 +552,26 @@ type oauth2Issuer struct {
 }
 
 func (p *MultiSourceProvider) newOAuth2Issuer(baseURL, clientID, clientSecret string) *oauth2Issuer {
-	return &oauth2Issuer{
-		baseURL:      baseURL,
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		httpClient:   p.httpClient,
-		logger:       p.logger,
-		promMetrics:  p.promMetrics,
+	issuer := &oauth2Issuer{
+		baseURL:     baseURL,
+		clientID:    clientID,
+		httpClient:  p.httpClient,
+		logger:      p.logger,
+		promMetrics: p.promMetrics,
 	}
+	issuer.clientSecret.Store(clientSecret)
+	return issuer
+}
+
+func (ti *oauth2Issuer) loadClientSecret() string {
+	if v := ti.clientSecret.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+func (ti *oauth2Issuer) storeClientSecret(secret string) {
+	ti.clientSecret.Store(secret)
 }
 
 func (ti *oauth2Issuer) loadTokenURL() string {
@@ -536,24 +581,43 @@ func (ti *oauth2Issuer) loadTokenURL() string {
 	return ""
 }
 
-func (ti *oauth2Issuer) ensureTokenURL(ctx context.Context, customHeaders map[string]string) error {
-	if ti.loadTokenURL() != "" {
-		return nil
+func (ti *oauth2Issuer) storeTokenURL(tokenURL string) {
+	ti.tokenURL.Store(tokenURL)
+}
+
+func (ti *oauth2Issuer) ensureTokenURL(ctx context.Context, headersProvider func() map[string]string) (string, error) {
+	tokenURL := ti.loadTokenURL()
+	if tokenURL != "" {
+		return tokenURL, nil
 	}
 
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+
+	if tokenURL = ti.loadTokenURL(); tokenURL != "" { // double check if another goroutine has set it
+		return tokenURL, nil
+	}
+
+	var err error
+	if tokenURL, err = ti.fetchTokenURL(ctx, headersProvider()); err != nil {
+		return "", err // already wrapped
+	}
+	ti.storeTokenURL(tokenURL)
+	return tokenURL, nil
+}
+
+func (ti *oauth2Issuer) fetchTokenURL(ctx context.Context, customHeaders map[string]string) (string, error) {
 	openIDCfgURL := strings.TrimSuffix(ti.baseURL, "/") + idputil.OpenIDConfigurationPath
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
 		ctx, ti.httpClient, openIDCfgURL, customHeaders, ti.logger, ti.promMetrics)
 	if err != nil {
-		return fmt.Errorf("(%s, %s): get OpenID configuration: %w", ti.baseURL, ti.clientID, err)
+		return "", fmt.Errorf("(%s, %s): get OpenID configuration: %w", ti.baseURL, ti.clientID, err)
 	}
-
 	if _, err = url.ParseRequestURI(openIDCfg.TokenURL); err != nil {
-		return fmt.Errorf("(%s, %s): issuer have returned a non-valid URL %q: %w",
+		return "", fmt.Errorf("(%s, %s): issuer have returned a non-valid token URL %q: %w",
 			ti.baseURL, ti.clientID, openIDCfg.TokenURL, err)
 	}
-	ti.tokenURL.Store(openIDCfg.TokenURL)
-	return nil
+	return openIDCfg.TokenURL, nil
 }
 
 func (ti *oauth2Issuer) issueToken(
@@ -574,11 +638,11 @@ func (ti *oauth2Issuer) issueToken(
 		return tokenData{}, reqErr
 	}
 	req = req.WithContext(ctx)
-	req.SetBasicAuth(ti.clientID, ti.clientSecret)
+	req.SetBasicAuth(ti.clientID, ti.loadClientSecret())
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	for key := range customHeaders {
-		req.Header.Add(key, customHeaders[key])
+	for key, value := range customHeaders {
+		req.Header.Add(key, value)
 	}
 	start := time.Now()
 	resp, err := ti.httpClient.Do(req)
@@ -591,7 +655,7 @@ func (ti *oauth2Issuer) issueToken(
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			ti.logger.Error(
-				fmt.Sprintf("(%s, %s): closing body", ti.loadTokenURL(), ti.clientID), log.Error(err),
+				fmt.Sprintf("(%s, %s): closing body", tokenURL, ti.clientID), log.Error(err),
 			)
 		}
 	}()
@@ -615,11 +679,12 @@ func (ti *oauth2Issuer) issueToken(
 	expires := time.Now().Add(time.Second * time.Duration(tokenResponse.ExpiresIn))
 	ti.logger.Infof("(%s, %s): issued token, expires on %s", ti.loadTokenURL(), ti.clientID, expires.UTC())
 	return tokenData{
-		Data:     tokenResponse.AccessToken,
-		Scope:    scope,
-		Expires:  expires,
-		issueURL: ti.loadTokenURL(),
-		ClientID: ti.clientID,
+		Data:           tokenResponse.AccessToken,
+		tokenURL:       tokenURL,
+		RequestedScope: scope,
+		CustomHeaders:  customHeaders,
+		Expires:        expires,
+		ClientID:       ti.clientID,
 	}, nil
 }
 
@@ -646,20 +711,33 @@ type ProviderOpts struct {
 }
 
 func uniqAndSort(s []string) []string {
-	uniq := make(map[string]struct{})
-	for ix := range s {
-		uniq[s[ix]] = struct{}{}
+	if len(s) <= 1 {
+		return s
 	}
-	result := make([]string, 0, len(uniq))
-	for k := range uniq {
-		result = append(result, k)
+	sort.Strings(s)
+	j := 0
+	for i := 1; i < len(s); i++ {
+		if s[j] != s[i] {
+			j++
+			s[j] = s[i]
+		}
 	}
-	sort.Strings(result)
-	return result
+	return s[:j+1]
 }
 
 func keyForCache(clientID, sourceURL string, scope []string) string {
-	return clientID + ":" + sourceURL + ":" + strings.Join(scope, ",")
+	var b strings.Builder
+	b.WriteString(clientID)
+	b.WriteString(":")
+	b.WriteString(sourceURL)
+	b.WriteString(":")
+	for i, s := range scope {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 func keyForIssuer(clientID, sourceURL string) string {
