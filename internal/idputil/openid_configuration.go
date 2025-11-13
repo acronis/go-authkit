@@ -58,7 +58,10 @@ func GetOpenIDConfiguration(
 	if resp.StatusCode != http.StatusOK {
 		promMetrics.ObserveHTTPClientRequest(
 			http.MethodGet, targetURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
-		return OpenIDConfiguration{}, fmt.Errorf("unexpected HTTP code %d", resp.StatusCode)
+		return OpenIDConfiguration{}, &UnexpectedResponseError{
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header.Clone(),
+		}
 	}
 
 	var openIDCfg OpenIDConfiguration

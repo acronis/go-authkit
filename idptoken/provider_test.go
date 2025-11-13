@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -781,6 +782,178 @@ func TestProviderConcurrency(t *testing.T) {
 		for i := 0; i < numGoroutines; i++ {
 			require.NoError(t, errors[i], "goroutine %d failed", i)
 		}
+	})
+}
+
+func TestProvider_OpenIDConfigurationErrors(t *testing.T) {
+	const retryAfterValue = "120"
+
+	t.Run("error, openid config returns 503", func(t *testing.T) {
+		// Create a test server that returns 503 for OpenID configuration endpoint
+		testServer := http.NewServeMux()
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		credentials := []idptoken.Source{
+			{
+				ClientID:     testClientID,
+				ClientSecret: "test-secret",
+				URL:          serverURL,
+			},
+		}
+		// Use a custom HTTP client with minimal timeout and no retries
+		httpClient := &http.Client{Timeout: 2 * time.Second}
+		opts := idptoken.ProviderOpts{
+			HTTPClient: httpClient,
+		}
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
+
+		_, err = provider.GetToken(context.Background(), testClientID, serverURL)
+		var svcUnavailableErr *idptoken.ServiceUnavailableError
+		require.ErrorAs(t, err, &svcUnavailableErr)
+		require.Equal(t, retryAfterValue, svcUnavailableErr.RetryAfter)
+	})
+
+	t.Run("error, openid config returns 429", func(t *testing.T) {
+		// Create a test server that returns 429 for OpenID configuration endpoint
+		testServer := http.NewServeMux()
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		credentials := []idptoken.Source{
+			{
+				ClientID:     testClientID,
+				ClientSecret: "test-secret",
+				URL:          serverURL,
+			},
+		}
+		// Use a custom HTTP client with minimal timeout and no retries
+		httpClient := &http.Client{Timeout: 2 * time.Second}
+		opts := idptoken.ProviderOpts{
+			HTTPClient: httpClient,
+		}
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
+
+		_, err = provider.GetToken(context.Background(), testClientID, serverURL)
+		var throttledErr *idptoken.ThrottledError
+		require.ErrorAs(t, err, &throttledErr)
+		require.Equal(t, retryAfterValue, throttledErr.RetryAfter)
+	})
+}
+
+func TestProvider_TokenEndpointErrors(t *testing.T) {
+	const retryAfterValue = "120"
+
+	t.Run("error, token endpoint returns 503", func(t *testing.T) {
+		// Create a test server that returns 503 for token endpoint
+		testServer := http.NewServeMux()
+		// OpenID configuration needs to be served to get the token URL
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			resp := map[string]string{
+				"token_endpoint": fmt.Sprintf("http://%s%s", r.Host, idptest.TokenEndpointPath),
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		testServer.HandleFunc(idptest.TokenEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		credentials := []idptoken.Source{
+			{
+				ClientID:     testClientID,
+				ClientSecret: "test-secret",
+				URL:          serverURL,
+			},
+		}
+		// Use a custom HTTP client with minimal timeout and no retries
+		httpClient := &http.Client{Timeout: 2 * time.Second}
+		opts := idptoken.ProviderOpts{
+			HTTPClient: httpClient,
+		}
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
+
+		_, err = provider.GetToken(context.Background(), testClientID, serverURL)
+		var svcUnavailableErr *idptoken.ServiceUnavailableError
+		require.ErrorAs(t, err, &svcUnavailableErr)
+		require.Equal(t, retryAfterValue, svcUnavailableErr.RetryAfter)
+	})
+
+	t.Run("error, token endpoint returns 429", func(t *testing.T) {
+		// Create a test server that returns 429 for token endpoint
+		testServer := http.NewServeMux()
+		// OpenID configuration needs to be served to get the token URL
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			resp := map[string]string{
+				"token_endpoint": fmt.Sprintf("http://%s%s", r.Host, idptest.TokenEndpointPath),
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		testServer.HandleFunc(idptest.TokenEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		credentials := []idptoken.Source{
+			{
+				ClientID:     testClientID,
+				ClientSecret: "test-secret",
+				URL:          serverURL,
+			},
+		}
+		// Use a custom HTTP client with minimal timeout and no retries
+		httpClient := &http.Client{Timeout: 2 * time.Second}
+		opts := idptoken.ProviderOpts{
+			HTTPClient: httpClient,
+		}
+		provider := idptoken.NewMultiSourceProviderWithOpts(credentials, opts)
+
+		_, err = provider.GetToken(context.Background(), testClientID, serverURL)
+		var throttledErr *idptoken.ThrottledError
+		require.ErrorAs(t, err, &throttledErr)
+		require.Equal(t, retryAfterValue, throttledErr.RetryAfter)
 	})
 }
 

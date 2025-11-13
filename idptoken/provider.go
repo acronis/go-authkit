@@ -611,6 +611,16 @@ func (ti *oauth2Issuer) fetchTokenURL(ctx context.Context, customHeaders map[str
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
 		ctx, ti.httpClient, openIDCfgURL, customHeaders, ti.logger, ti.promMetrics)
 	if err != nil {
+		var unexpectedRespErr *idputil.UnexpectedResponseError
+		if errors.As(err, &unexpectedRespErr) {
+			retryAfter := unexpectedRespErr.Header.Get("Retry-After")
+			switch unexpectedRespErr.StatusCode {
+			case http.StatusServiceUnavailable:
+				return "", &ServiceUnavailableError{RetryAfter: retryAfter, Err: err}
+			case http.StatusTooManyRequests:
+				return "", &ThrottledError{RetryAfter: retryAfter, Err: err}
+			}
+		}
 		return "", fmt.Errorf("(%s, %s): get OpenID configuration: %w", ti.baseURL, ti.clientID, err)
 	}
 	if _, err = url.ParseRequestURI(openIDCfg.TokenURL); err != nil {
@@ -660,6 +670,20 @@ func (ti *oauth2Issuer) issueToken(
 		}
 	}()
 
+	if resp.StatusCode != http.StatusOK {
+		ti.promMetrics.ObserveHTTPClientRequest(
+			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
+		retryAfter := resp.Header.Get("Retry-After")
+		err := &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadTokenURL()}
+		switch resp.StatusCode {
+		case http.StatusServiceUnavailable:
+			return tokenData{}, &ServiceUnavailableError{RetryAfter: retryAfter, Err: err}
+		case http.StatusTooManyRequests:
+			return tokenData{}, &ThrottledError{RetryAfter: retryAfter, Err: err}
+		}
+		return tokenData{}, err
+	}
+
 	tokenResponse := tokenResponseBody{}
 	if err = json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
 		ti.promMetrics.ObserveHTTPClientRequest(
@@ -667,12 +691,6 @@ func (ti *oauth2Issuer) issueToken(
 		return tokenData{}, fmt.Errorf(
 			"(%s, %s): read and unmarshal IDP response: %w", ti.loadTokenURL(), ti.clientID, err,
 		)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		ti.promMetrics.ObserveHTTPClientRequest(
-			http.MethodPost, tokenURL, resp.StatusCode, elapsed, metrics.HTTPRequestErrorUnexpectedStatusCode)
-		return tokenData{}, &UnexpectedIDPResponseError{HTTPCode: resp.StatusCode, IssueURL: ti.loadTokenURL()}
 	}
 
 	ti.promMetrics.ObserveHTTPClientRequest(http.MethodPost, tokenURL, resp.StatusCode, elapsed, "")
