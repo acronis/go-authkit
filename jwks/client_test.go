@@ -65,7 +65,7 @@ func TestClient_GetRSAPublicKey(t *testing.T) {
 		var openIDCfgErr *jwks.GetOpenIDConfigurationError
 		require.True(t, errors.As(err, &openIDCfgErr))
 		require.Equal(t, issuerConfigServer.URL+idputil.OpenIDConfigurationPath, openIDCfgErr.URL)
-		require.EqualError(t, openIDCfgErr.Inner, "unexpected HTTP code 500")
+		require.EqualError(t, openIDCfgErr.Inner, "unexpected HTTP status code 500")
 		require.Nil(t, pubKey)
 	})
 

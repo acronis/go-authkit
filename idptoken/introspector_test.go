@@ -9,6 +9,7 @@ package idptoken_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -1452,5 +1453,90 @@ func TestIntrospector_IntrospectToken_ConcurrentCloning(t *gotesting.T) {
 			err := <-errChan
 			require.NoError(t, err)
 		}
+	})
+}
+
+func TestIntrospector_OpenIDConfigurationErrors(t *gotesting.T) {
+	const validAccessToken = "access-token-with-introspection-permission"
+	const retryAfterValue = "120"
+
+	t.Run("error, dynamic introspection endpoint, openid config returns 503", func(t *gotesting.T) {
+		// Create a test server that returns 503 for OpenID configuration endpoint
+		testServer := http.NewServeMux()
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		// Create a JWT token with this issuer
+		tokenToIntrospect := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{
+			RegisteredClaims: jwtgo.RegisteredClaims{
+				Issuer:    serverURL,
+				Subject:   uuid.NewString(),
+				ID:        uuid.NewString(),
+				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+			},
+		})
+
+		introspector, err := idptoken.NewIntrospectorWithOpts(
+			idptest.NewSimpleTokenProvider(validAccessToken),
+			idptoken.IntrospectorOpts{},
+		)
+		require.NoError(t, err)
+		require.NoError(t, introspector.AddTrustedIssuerURL(serverURL))
+
+		_, err = introspector.IntrospectToken(context.Background(), tokenToIntrospect)
+		var svcUnavailableErr *idptoken.ServiceUnavailableError
+		require.ErrorAs(t, err, &svcUnavailableErr)
+		require.Equal(t, retryAfterValue, svcUnavailableErr.RetryAfter)
+	})
+
+	t.Run("error, dynamic introspection endpoint, openid config returns 429", func(t *gotesting.T) {
+		// Create a test server that returns 429 for OpenID configuration endpoint
+		testServer := http.NewServeMux()
+		testServer.HandleFunc(idptest.OpenIDConfigurationPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: testServer}
+		listener, err := net.Listen("tcp", server.Addr)
+		require.NoError(t, err)
+		defer func() { _ = listener.Close() }()
+
+		go func() { _ = server.Serve(listener) }()
+		defer func() { _ = server.Shutdown(context.Background()) }()
+
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+
+		// Create a JWT token with this issuer
+		tokenToIntrospect := idptest.MustMakeTokenStringSignedWithTestKey(&jwt.DefaultClaims{
+			RegisteredClaims: jwtgo.RegisteredClaims{
+				Issuer:    serverURL,
+				Subject:   uuid.NewString(),
+				ID:        uuid.NewString(),
+				ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+			},
+		})
+
+		introspector, err := idptoken.NewIntrospectorWithOpts(
+			idptest.NewSimpleTokenProvider(validAccessToken),
+			idptoken.IntrospectorOpts{},
+		)
+		require.NoError(t, err)
+		require.NoError(t, introspector.AddTrustedIssuerURL(serverURL))
+
+		_, err = introspector.IntrospectToken(context.Background(), tokenToIntrospect)
+		var throttledErr *idptoken.ThrottledError
+		require.ErrorAs(t, err, &throttledErr)
+		require.Equal(t, retryAfterValue, throttledErr.RetryAfter)
 	})
 }

@@ -674,6 +674,16 @@ func (i *Introspector) getWellKnownIntrospectionEndpointURL(ctx context.Context,
 	openIDCfg, err := idputil.GetOpenIDConfiguration(
 		ctx, i.HTTPClient, openIDCfgURL, nil, logger, i.promMetrics)
 	if err != nil {
+		var unexpectedRespErr *idputil.UnexpectedResponseError
+		if errors.As(err, &unexpectedRespErr) {
+			retryAfter := unexpectedRespErr.Header.Get("Retry-After")
+			switch unexpectedRespErr.StatusCode {
+			case http.StatusServiceUnavailable:
+				return "", &ServiceUnavailableError{RetryAfter: retryAfter, Err: err}
+			case http.StatusTooManyRequests:
+				return "", &ThrottledError{RetryAfter: retryAfter, Err: err}
+			}
+		}
 		return "", fmt.Errorf("get OpenID configuration: %w", err)
 	}
 	if openIDCfg.IntrospectionEndpoint == "" {
