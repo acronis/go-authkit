@@ -38,8 +38,8 @@ var (
 // We are using "var" here because some services may want to use different error messages.
 var (
 	ErrMessageBearerTokenMissing   = "Authorization bearer token is missing."
-	ErrMessageAuthenticationFailed = "Authentication is failed."
-	ErrMessageAuthorizationFailed  = "Authorization is failed."
+	ErrMessageAuthenticationFailed = "Authentication has failed."
+	ErrMessageAuthorizationFailed  = "Authorization has failed."
 	ErrMessageServiceUnavailable   = "Service temporarily unavailable."
 )
 
@@ -117,7 +117,7 @@ func WithJWTAuthMiddlewarePrometheusLibInstanceLabel(label string) JWTAuthMiddle
 // JWTAuthMiddleware is a middleware that does authentication
 // by Access Token from the "Authorization" HTTP header of incoming request.
 // errorDomain is used for error responses. It is usually the name of the service that uses the middleware,
-// and its goal is distinguishing errors from different services.
+// and its goal is to distinguish errors from different services.
 // It helps to understand where the error occurred and what service caused it.
 // For example, if the "Authorization" HTTP header is missing, the middleware will return 401 with the following response body:
 //
@@ -166,7 +166,7 @@ func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				h.promMetrics.IncTokenIntrospectionsTotal(metrics.TokenIntrospectionStatusNotNeeded)
 
 			case errors.Is(err, idptoken.ErrTokenNotIntrospectable):
-				// Token is not introspectable by some reason.
+				// Token is not introspectable for some reason.
 				// In this case, we will parse it as JWT and use it for authZ.
 				logger.Warn("token is not introspectable, it will be used for authentication and authorization as is",
 					log.Error(err))

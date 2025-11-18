@@ -335,7 +335,7 @@ func (p *MultiSourceProvider) cacheToken(token tokenData, issuerURL string) {
 	p.cache.Put(token.cacheKey(), details)
 
 	// Update next refresh time if needed and signal refresh loop
-	if pNextRefresh := p.getNextRefresh(); pNextRefresh == zeroTime || nextRefresh.UnixNano() <= pNextRefresh.UnixNano() {
+	if pNextRefresh := p.getNextRefresh(); pNextRefresh.IsZero() || nextRefresh.UnixNano() <= pNextRefresh.UnixNano() {
 		p.setNextRefresh(nextRefresh)
 		select {
 		case p.rescheduleSignal <- struct{}{}:
@@ -389,7 +389,7 @@ func (p *MultiSourceProvider) refreshTokens(ctx context.Context) {
 			resultMap[details] = struct{}{}
 			continue
 		}
-		if nextRefresh == zeroTime {
+		if nextRefresh.IsZero() {
 			nextRefresh = details.nextRefresh
 		}
 		if details.nextRefresh.UnixNano() <= nextRefresh.UnixNano() {
@@ -433,7 +433,7 @@ func (p *MultiSourceProvider) refreshLoop(ctx context.Context) {
 		nextRefresh := p.getNextRefresh()
 
 		currentRefresh = nextRefresh
-		if nextRefresh == zeroTime {
+		if nextRefresh.IsZero() {
 			stopped = true
 			return
 		}
