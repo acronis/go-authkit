@@ -98,7 +98,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 		}
@@ -128,7 +128,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 		}
@@ -167,7 +167,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 		}
@@ -200,7 +200,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 		}
@@ -232,12 +232,12 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL() + "/weird",
 			},
 		}
@@ -272,7 +272,7 @@ func TestProviderWithCache(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "DAGztV5L2hMZyECzer6SXS",
+				ClientSecret: uuid.NewString(),
 				URL:          server.URL(),
 			},
 		}
@@ -304,17 +304,16 @@ func TestProviderWithCache(t *testing.T) {
 
 		server2 := idptest.NewHTTPServer(
 			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 2 * time.Second}),
-			idptest.WithHTTPAddress(":8082"),
 		)
 		require.NoError(t, server2.StartAndWaitForReady(time.Second))
 		defer func() { _ = server2.Shutdown(context.Background()) }()
 
 		credentials := []idptoken.Source{
 			{
-				ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
+				ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server.URL(),
 			},
 			{
-				ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXs", URL: server2.URL(),
+				ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server2.URL(),
 			},
 		}
 		opts := idptoken.ProviderOpts{
@@ -343,17 +342,16 @@ func TestProviderWithCache(t *testing.T) {
 
 		server2 := idptest.NewHTTPServer(
 			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 2 * time.Second}),
-			idptest.WithHTTPAddress(":8082"),
 		)
 		require.NoError(t, server2.StartAndWaitForReady(time.Second))
 		defer func() { _ = server2.Shutdown(context.Background()) }()
 
 		credentials := []idptoken.Source{
 			{
-				ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
+				ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server.URL(),
 			},
 			{
-				ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXs", URL: server2.URL(),
+				ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server2.URL(),
 			},
 		}
 		opts := idptoken.ProviderOpts{
@@ -377,7 +375,7 @@ func TestProviderWithCache(t *testing.T) {
 		defer func() { _ = server.Shutdown(context.Background()) }()
 
 		credentials := idptoken.Source{
-			ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
+			ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server.URL(),
 		}
 		opts := idptoken.ProviderOpts{
 			Logger:           logger,
@@ -397,7 +395,7 @@ func TestProviderWithCache(t *testing.T) {
 		defer func() { _ = server.Shutdown(context.Background()) }()
 
 		credentials := idptoken.Source{
-			ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
+			ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server.URL(),
 		}
 		provider := idptoken.NewMultiSourceProviderWithOpts(nil, idptoken.ProviderOpts{HTTPClient: httpClient})
 		go provider.RefreshTokensPeriodically(context.Background())
@@ -416,14 +414,14 @@ func TestProviderWithCache(t *testing.T) {
 		defer func() { _ = server.Shutdown(context.Background()) }()
 
 		credentials := idptoken.Source{
-			ClientID: testClientID, ClientSecret: "DAGztV5L2hMZyECzer6SXS", URL: server.URL(),
+			ClientID: testClientID, ClientSecret: uuid.NewString(), URL: server.URL(),
 		}
 		tokenCache := idptoken.NewInMemoryTokenCache()
 		provider := idptoken.NewMultiSourceProviderWithOpts(nil, idptoken.ProviderOpts{
 			CustomCacheInstance: tokenCache, HTTPClient: httpClient})
 		go provider.RefreshTokensPeriodically(context.Background())
 		provider.RegisterSource(credentials)
-		credentials.ClientSecret = "newsecret"
+		credentials.ClientSecret = uuid.NewString()
 		provider.RegisterSource(credentials)
 		_, tokenErr := provider.GetToken(
 			context.Background(), testClientID, server.URL(), "tenants:read",
@@ -431,7 +429,7 @@ func TestProviderWithCache(t *testing.T) {
 		require.NoError(t, tokenErr)
 		provider.RegisterSource(credentials)
 		require.Equal(t, 1, len(tokenCache.Keys()), "updating with same secret does not reset the cache")
-		credentials.ClientSecret = "evennewersecret"
+		credentials.ClientSecret = uuid.NewString()
 		provider.RegisterSource(credentials)
 		require.Equal(t, 0, len(tokenCache.Keys()), "updating with a new secret does reset the cache")
 	})
@@ -558,7 +556,7 @@ func TestProviderConcurrency(t *testing.T) {
 				defer wg.Done()
 				source := idptoken.Source{
 					ClientID:     fmt.Sprintf("client-%d", idx),
-					ClientSecret: fmt.Sprintf("secret-%d", idx),
+					ClientSecret: uuid.NewString(),
 					URL:          server.URL(),
 				}
 				provider.RegisterSource(source)
@@ -739,7 +737,6 @@ func TestProviderConcurrency(t *testing.T) {
 
 		server2 := idptest.NewHTTPServer(
 			idptest.WithHTTPClaimsProvider(&claimsProviderWithExpiration{ExpTime: 10 * time.Second}),
-			idptest.WithHTTPAddress(":8082"),
 		)
 		require.NoError(t, server2.StartAndWaitForReady(time.Second))
 		defer func() { _ = server2.Shutdown(context.Background()) }()
@@ -808,7 +805,7 @@ func TestProvider_OpenIDConfigurationErrors(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "test-secret",
+				ClientSecret: uuid.NewString(),
 				URL:          serverURL,
 			},
 		}
@@ -845,7 +842,7 @@ func TestProvider_OpenIDConfigurationErrors(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "test-secret",
+				ClientSecret: uuid.NewString(),
 				URL:          serverURL,
 			},
 		}
@@ -894,7 +891,7 @@ func TestProvider_TokenEndpointErrors(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "test-secret",
+				ClientSecret: uuid.NewString(),
 				URL:          serverURL,
 			},
 		}
@@ -939,7 +936,7 @@ func TestProvider_TokenEndpointErrors(t *testing.T) {
 		credentials := []idptoken.Source{
 			{
 				ClientID:     testClientID,
-				ClientSecret: "test-secret",
+				ClientSecret: uuid.NewString(),
 				URL:          serverURL,
 			},
 		}
