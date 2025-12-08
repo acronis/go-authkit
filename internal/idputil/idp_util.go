@@ -24,6 +24,15 @@ const JWTTypeAccessToken = "at+jwt"
 
 const JWTTypeAppAccessToken = "application/at+jwt"
 
+// "irn" stands for "Introspectable Resource Namespace".
+// It contains array of Resource Namespaces for roles available after token introspection only.
+const JWTHeaderFieldIRN = "irn"
+
+// "nri" stands for "Not Required Introspection".
+// This header field is absent for all Hybrid tokens and set to 1 for non-hybrid tokens.
+// Important: the "nri" field (and related logic) is planned to be deprecated in favor of "irn" header field (PLTFRM-85633).
+const JWTHeaderFieldNRI = "nri"
+
 const TokenTypeBearer = "Bearer"
 
 const (

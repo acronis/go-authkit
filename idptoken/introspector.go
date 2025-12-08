@@ -489,7 +489,7 @@ func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token str
 	if err != nil {
 		return i.getStaticIntrospectFuncOrError(fmt.Errorf("parse JWT header: %w", err))
 	}
-	if !checkIntrospectionRequiredByJWTHeader(jwtHeader) {
+	if !checkIntrospectionRequiredByJWTHeader(jwtHeader, i.scopeFilter) {
 		return nil, ErrTokenIntrospectionNotNeeded
 	}
 
@@ -745,9 +745,16 @@ func parserJWTHeader(b []byte) (map[string]interface{}, error) {
 }
 
 // checkIntrospectionRequiredByJWTHeader checks if introspection is required by JWT header.
-// Introspection is required by default.
-func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) bool {
-	notRequiredIntrospection, ok := jwtHeader["nri"]
+// Introspection is required when BOTH conditions are true:
+// 1. nri field indicates introspection is required (nri absent/false/0)
+// 2. irn (Introspectable Resource Namespace) field contains list of Resource Namespaces matching the scopeFilter
+func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}, scopeFilter jwt.ScopeFilter) bool {
+	return introspectionRequiredByNRIField(jwtHeader) &&
+		introspectionRequiredByIRNField(jwtHeader, scopeFilter)
+}
+
+func introspectionRequiredByNRIField(jwtHeader map[string]interface{}) bool {
+	notRequiredIntrospection, ok := jwtHeader[idputil.JWTHeaderFieldNRI]
 	if !ok {
 		return true
 	}
@@ -764,6 +771,36 @@ func checkIntrospectionRequiredByJWTHeader(jwtHeader map[string]interface{}) boo
 		return iVal == 0
 	}
 	return true
+}
+
+// introspectionRequiredByIRNField checks if current scope filter requires an Access Policy that is only
+// visible after token introspection and listed in the "irn" JWT header. In that case introspection is mandatory.
+func introspectionRequiredByIRNField(jwtHeader map[string]any, scopeFilter jwt.ScopeFilter) bool {
+	if len(scopeFilter) == 0 {
+		return true
+	}
+	// Backward compatibility: "irn" JWT header can be absent.
+	introspectableRNs, ok := jwtHeader[idputil.JWTHeaderFieldIRN]
+	if !ok {
+		return true
+	}
+	var introspectableRNsArr []any
+	if introspectableRNsArr, ok = introspectableRNs.([]any); !ok || len(introspectableRNsArr) == 0 {
+		return false
+	}
+	for i := range scopeFilter {
+		sfRN := strings.TrimSpace(scopeFilter[i].ResourceNamespace)
+		for j := range introspectableRNsArr {
+			iRN, ok := introspectableRNsArr[j].(string)
+			if !ok {
+				continue
+			}
+			if strings.EqualFold(sfRN, strings.TrimSpace(iRN)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type IntrospectionCacheItem struct {
