@@ -82,6 +82,13 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 		Role:              "account_viewer",
 		ResourcePath:      "resource-" + uuid.NewString(),
 	}}
+	validJWTScopeEmptyRN := []jwt.AccessPolicy{
+		{
+			TenantUUID:        uuid.NewString(),
+			ResourceNamespace: "",
+			Role:              "account_viewer",
+			ResourcePath:      "resource-" + uuid.NewString(),
+		}}
 	validJWTRegClaims := jwtgo.RegisteredClaims{
 		Issuer:    httpIDPSrv.URL(),
 		Audience:  jwtgo.ClaimStrings{"https://rs.example.com"},
@@ -97,6 +104,16 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"typ": idputil.JWTTypeAppAccessToken})
 	httpServerIntrospector.SetResultForToken(validJWTWithAppTyp, &idptoken.DefaultIntrospectionResult{Active: true,
 		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}}, nil)
+	validJWTWithIntrospectableRNs := idptest.MustMakeTokenStringWithHeader(&jwt.DefaultClaims{
+		RegisteredClaims: validJWTRegClaims,
+	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{idputil.JWTHeaderFieldIRN: []string{"account-server", ""}})
+	httpServerIntrospector.SetResultForToken(validJWTWithIntrospectableRNs, &idptoken.DefaultIntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope}}, nil)
+	validJWTWithEmptyIntrospectableRNs := idptest.MustMakeTokenStringWithHeader(&jwt.DefaultClaims{
+		RegisteredClaims: validJWTRegClaims,
+	}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{idputil.JWTHeaderFieldIRN: []string{""}})
+	httpServerIntrospector.SetResultForToken(validJWTWithEmptyIntrospectableRNs, &idptoken.DefaultIntrospectionResult{Active: true,
+		TokenType: idputil.TokenTypeBearer, DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScopeEmptyRN}}, nil)
 	grpcServerIntrospector.SetResultForToken(validJWT, &pb.IntrospectTokenResponse{
 		Active:    true,
 		TokenType: idputil.TokenTypeBearer,
@@ -318,6 +335,57 @@ func TestIntrospector_IntrospectToken(t *gotesting.T) {
 			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"nri": true}),
 			checkError: func(t *gotesting.T, err error) {
 				require.ErrorIs(t, err, idptoken.ErrTokenIntrospectionNotNeeded)
+			},
+		},
+		{
+			name: "error, dynamic introspection endpoint, nri is false, but irn does not match scope filter",
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ScopeFilter: []jwt.ScopeFilterAccessPolicy{{ResourceNamespace: "event-manager"}},
+			},
+			tokenToIntrospect: idptest.MustMakeTokenStringWithHeader(&jwt.DefaultClaims{
+				RegisteredClaims: jwtgo.RegisteredClaims{
+					Subject:   uuid.NewString(),
+					ID:        uuid.NewString(),
+					ExpiresAt: jwtgo.NewNumericDate(time.Now().Add(time.Hour)),
+				},
+			}, idptest.TestKeyID, idptest.GetTestRSAPrivateKey(), map[string]interface{}{"irn": "account-server"}),
+			checkError: func(t *gotesting.T, err error) {
+				require.ErrorIs(t, err, idptoken.ErrTokenIntrospectionNotNeeded)
+			},
+		},
+		{
+			name: "ok, dynamic introspection endpoint, nri is false, irn match scope filter",
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ScopeFilter: []jwt.ScopeFilterAccessPolicy{{ResourceNamespace: "account-server"}},
+			},
+			tokenToIntrospect: validJWTWithIntrospectableRNs,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScope},
+			},
+			expectedHTTPSrvCalled: true,
+			expectedHTTPFormVals: url.Values{
+				"token":              {validJWTWithIntrospectableRNs},
+				"scope_filter[0].rn": {"account-server"},
+			},
+		},
+		{
+			name: "ok, dynamic introspection endpoint, nri is false, irn match scope filter and contains empty string element",
+			introspectorOpts: idptoken.IntrospectorOpts{
+				ScopeFilter: []jwt.ScopeFilterAccessPolicy{{ResourceNamespace: "event-manager"}, {ResourceNamespace: ""}},
+			},
+			tokenToIntrospect: validJWTWithEmptyIntrospectableRNs,
+			expectedResult: &idptoken.DefaultIntrospectionResult{
+				Active:        true,
+				TokenType:     idputil.TokenTypeBearer,
+				DefaultClaims: jwt.DefaultClaims{RegisteredClaims: validJWTRegClaims, Scope: validJWTScopeEmptyRN},
+			},
+			expectedHTTPSrvCalled: true,
+			expectedHTTPFormVals: url.Values{
+				"token":              {validJWTWithEmptyIntrospectableRNs},
+				"scope_filter[0].rn": {"event-manager"},
+				"scope_filter[1].rn": {""},
 			},
 		},
 		{
