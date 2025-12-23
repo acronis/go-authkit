@@ -32,6 +32,12 @@ func main() {
 	}
 }
 
+const (
+	usernameUser   = "user"
+	usernameAdmin  = "admin"
+	usernameAdmin2 = "admin2"
+)
+
 func runApp() error {
 	const idpAddr = "127.0.0.1:8081"
 
@@ -83,7 +89,7 @@ func (dti *demoTokenIntrospector) IntrospectToken(r *http.Request, token string)
 		return &idptoken.DefaultIntrospectionResult{Active: false}, nil
 	}
 	defClaims := claims.(*jwt.DefaultClaims) // type assertion is safe here since we don't use custom claims
-	if defClaims.Subject == "admin2" {
+	if defClaims.Subject == usernameAdmin2 {
 		defClaims.Scope = append(defClaims.Scope, jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
 	}
 	return &idptoken.DefaultIntrospectionResult{Active: true, TokenType: "Bearer", DefaultClaims: *defClaims}, nil
@@ -99,13 +105,13 @@ func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
 	}
 	claims := &jwt.DefaultClaims{}
 	switch {
-	case username == "user" && password == "user-pwd":
-		claims.Subject = "user"
-	case username == "admin" && password == "admin-pwd":
-		claims.Subject = "admin"
+	case username == usernameUser && password == "user-pwd":
+		claims.Subject = usernameUser
+	case username == usernameAdmin && password == "admin-pwd":
+		claims.Subject = usernameAdmin
 		claims.Scope = []jwt.AccessPolicy{{ResourceNamespace: "my_service", Role: "admin"}}
-	case username == "admin2" && password == "admin2-pwd":
-		claims.Subject = "admin2"
+	case username == usernameAdmin2 && password == "admin2-pwd":
+		claims.Subject = usernameAdmin2
 	default:
 		return nil, idptest.ErrUnauthorized
 	}

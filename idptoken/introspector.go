@@ -459,6 +459,7 @@ func (i *Introspector) introspectToken(ctx context.Context, token string) (Intro
 
 type introspectFunc func(ctx context.Context, token string) (IntrospectionResult, error)
 
+// nolint:gocyclo // Function determines introspection strategy based on multiple token characteristics
 func (i *Introspector) makeIntrospectFuncForToken(ctx context.Context, token string) (introspectFunc, error) {
 	var err error
 

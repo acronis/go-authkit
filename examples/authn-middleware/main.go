@@ -11,6 +11,7 @@ import (
 	"fmt"
 	golog "log"
 	"net/http"
+	"time"
 
 	"github.com/acronis/go-appkit/config"
 	"github.com/acronis/go-appkit/httpserver/middleware"
@@ -48,12 +49,18 @@ func runApp() error {
 
 	srvMux := http.NewServeMux()
 	srvMux.Handle("/", authNMw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context())       // get JWT claims from the request context
-		tokenSubject, _ := jwtClaims.GetSubject()                       // error is always nil here unless custom claims are used
-		_, _ = rw.Write([]byte(fmt.Sprintf("Hello, %s", tokenSubject))) // use the subject to greet the user
+		jwtClaims := authkit.GetJWTClaimsFromContext(r.Context()) // get JWT claims from the request context
+		tokenSubject, _ := jwtClaims.GetSubject()                 // error is always nil here unless custom claims are used
+		_, _ = fmt.Fprintf(rw, "Hello, %s", tokenSubject)         // use the subject to greet the user
 	})))
 	srvHandler := middleware.RequestID()(middleware.Logging(logger)(srvMux))
-	if err = http.ListenAndServe(":8080", srvHandler); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      srvHandler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and HTTP server: %w", err)
 	}
 

@@ -29,6 +29,7 @@ type TokenHandler struct {
 	ClaimsProvider HTTPClaimsProvider
 }
 
+// nolint:gocyclo // Token handler handles multiple grant types and error cases
 func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(rw, "Only POST method is allowed", http.StatusMethodNotAllowed)

@@ -197,9 +197,10 @@ type IntrospectionConfig struct {
 	Endpoint         string   `mapstructure:"endpoint" yaml:"endpoint" json:"endpoint"`
 	AccessTokenScope []string `mapstructure:"accessTokenScope" yaml:"accessTokenScope" json:"accessTokenScope"`
 
-	ClaimsCache            IntrospectionCacheConfig `mapstructure:"claimsCache" yaml:"claimsCache" json:"claimsCache"`
-	NegativeCache          IntrospectionCacheConfig `mapstructure:"negativeCache" yaml:"negativeCache" json:"negativeCache"`
-	EndpointDiscoveryCache IntrospectionCacheConfig `mapstructure:"endpointDiscoveryCache" yaml:"endpointDiscoveryCache" json:"endpointDiscoveryCache"` // nolint:lll
+	ClaimsCache   IntrospectionCacheConfig `mapstructure:"claimsCache" yaml:"claimsCache" json:"claimsCache"`
+	NegativeCache IntrospectionCacheConfig `mapstructure:"negativeCache" yaml:"negativeCache" json:"negativeCache"`
+	// nolint:lll // Struct tag with multiple format specifiers exceeds line length, breaking it would reduce readability
+	EndpointDiscoveryCache IntrospectionCacheConfig `mapstructure:"endpointDiscoveryCache" yaml:"endpointDiscoveryCache" json:"endpointDiscoveryCache"`
 
 	GRPC IntrospectionGRPCConfig `mapstructure:"grpc" yaml:"grpc" json:"grpc"`
 }
@@ -253,13 +254,13 @@ func (c *Config) Set(dp config.DataProvider) error {
 		return err
 	}
 	c.GRPCClient.RequestTimeout = config.TimeDuration(reqDuration)
-	if err = c.setJWTConfig(dp); err != nil {
+	if err := c.setJWTConfig(dp); err != nil {
 		return err
 	}
-	if err = c.setJWKSConfig(dp); err != nil {
+	if err := c.setJWKSConfig(dp); err != nil {
 		return err
 	}
-	if err = c.setIntrospectionConfig(dp); err != nil {
+	if err := c.setIntrospectionConfig(dp); err != nil {
 		return err
 	}
 
@@ -308,6 +309,7 @@ func (c *Config) setJWKSConfig(dp config.DataProvider) error {
 	return nil
 }
 
+// nolint:gocyclo // Configuration parsing involves multiple conditional branches for different config options
 func (c *Config) setIntrospectionConfig(dp config.DataProvider) error {
 	var err error
 

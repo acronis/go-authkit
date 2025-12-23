@@ -87,7 +87,7 @@ func NewJWTParser(cfg *Config, opts ...JWTParserOption) (JWTParser, error) {
 		if err != nil {
 			return nil, fmt.Errorf("new caching JWT parser: %w", err)
 		}
-		if err = addTrustedIssuers(cachingJWTParser, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
+		if err := addTrustedIssuers(cachingJWTParser, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
 			return nil, err
 		}
 		return cachingJWTParser, nil
@@ -251,7 +251,7 @@ func NewTokenIntrospector(
 		return nil, err
 	}
 
-	if err = addTrustedIssuers(introspector, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
+	if err := addTrustedIssuers(introspector, cfg.JWT.TrustedIssuers, cfg.JWT.TrustedIssuerURLs); err != nil {
 		return nil, err
 	}
 
@@ -380,7 +380,8 @@ func makeGRPCTransportCredentials(tlsCfg GRPCTLSConfig) (credentials.TransportCr
 		return insecure.NewCredentials(), nil
 	}
 
-	config := &tls.Config{} // nolint: gosec // TLS 1.2 is used by default.
+	// nolint:gosec // G402: TLS MinVersion not set - TLS 1.2 is used by default.
+	config := &tls.Config{}
 	if tlsCfg.CACert != "" {
 		caCert, err := os.ReadFile(tlsCfg.CACert)
 		if err != nil {

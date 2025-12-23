@@ -94,11 +94,11 @@ func (cp *CachingParser) getFromCacheAndValidateIfNeeded(key [sha256.Size]byte) 
 	if !found {
 		return nil, false, nil
 	}
-	if !cp.Parser.skipClaimsValidation {
+	if !cp.skipClaimsValidation {
 		if err = cp.claimsValidator.Validate(cachedClaims); err != nil {
 			return nil, true, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
 		}
-		if err = cp.Parser.audienceValidator.Validate(cachedClaims); err != nil {
+		if err = cp.audienceValidator.Validate(cachedClaims); err != nil {
 			return nil, true, fmt.Errorf("%w: %w", jwtgo.ErrTokenInvalidClaims, err)
 		}
 	}

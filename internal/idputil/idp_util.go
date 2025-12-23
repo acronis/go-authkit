@@ -18,7 +18,8 @@ import (
 	"github.com/acronis/go-authkit/internal/libinfo"
 )
 
-const GrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint: gosec // false positive
+// nolint:gosec // G101: False positive - this is a grant type constant, not a hardcoded credential
+const GrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
 const JWTTypeAccessToken = "at+jwt"
 

@@ -488,11 +488,6 @@ func TestTokenIntrospectorSetUserAgent(t *gotesting.T) {
 			httpServerIntrospector.JWTParser = jwtParser
 			grpcServerIntrospector.JWTParser = jwtParser
 
-			opts := []TokenIntrospectorOption{}
-			if tt.expectedUserAgent != "" {
-				opts = append(opts, WithTokenIntrospectorUserAgent(tt.expectedUserAgent))
-			}
-
 			introspector, err := NewTokenIntrospector(
 				tt.cfg, idptest.NewSimpleTokenProvider(validAccessToken), nil, WithTokenIntrospectorUserAgent(tt.expectedUserAgent),
 			)

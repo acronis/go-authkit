@@ -49,7 +49,7 @@ func runApp() error {
 		idptest.WithGRPCAddr(grpcAddr),
 		idptest.WithGRPCTokenIntrospector(&demoGRPCTokenIntrospector{jwtParser: jwtParser, logger: logger}),
 	)
-	if err = grpcSrv.StartAndWaitForReady(time.Second * 3); err != nil {
+	if err := grpcSrv.StartAndWaitForReady(time.Second * 3); err != nil {
 		return err
 	}
 	logger.Info("GRPC server for token introspection is running on " + grpcAddr)
