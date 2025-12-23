@@ -345,9 +345,10 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		withBearerToken(req, testBearerToken)
 		resp := httptest.NewRecorder()
 
+		type contextKey string
 		const (
-			ctxKey   = "verify-access-key"
-			ctxValue = "verify-access-value"
+			ctxKey   contextKey = "verify-access-key"
+			ctxValue string     = "verify-access-value"
 		)
 		var verifyAccess = func(r *http.Request, claims jwt.Claims) bool {
 			*r = *r.WithContext(context.WithValue(r.Context(), ctxKey, ctxValue))

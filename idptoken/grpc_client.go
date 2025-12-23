@@ -197,6 +197,7 @@ type TokenData struct {
 }
 
 // IntrospectToken introspects the token using the IDP token service.
+// nolint:gocyclo // Token introspection involves multiple response type checks and error handling paths
 func (c *GRPCClient) IntrospectToken(
 	ctx context.Context, token string, scopeFilter jwt.ScopeFilter, accessToken string,
 ) (IntrospectionResult, error) {

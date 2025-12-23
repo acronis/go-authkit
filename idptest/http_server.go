@@ -231,7 +231,7 @@ func NewHTTPServer(options ...HTTPServerOption) *HTTPServer {
 	// nolint:gosec // This server is used for testing purposes only.
 	s.Server = &http.Server{Handler: s.Router}
 	if s.middleware != nil {
-		s.Server.Handler = s.middleware(s.Router)
+		s.Handler = s.middleware(s.Router)
 	}
 
 	return s
@@ -261,7 +261,7 @@ func (s *HTTPServer) Start() error {
 		cb()
 	}
 
-	go func() { _ = s.Server.Serve(ln) }()
+	go func() { _ = s.Serve(ln) }()
 
 	return nil
 }

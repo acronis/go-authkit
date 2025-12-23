@@ -205,6 +205,7 @@ func (m *GRPCServerTokenIntrospectorMock) SetAccessTokenForIntrospection(accessT
 	m.accessTokenForIntrospection = accessToken
 }
 
+// nolint:gocyclo,funlen // Mock implementation handles multiple test scenarios with different response types
 func (m *GRPCServerTokenIntrospectorMock) IntrospectToken(
 	ctx context.Context, req *pb.IntrospectTokenRequest,
 ) (*pb.IntrospectTokenResponse, error) {

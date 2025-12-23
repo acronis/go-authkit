@@ -181,7 +181,7 @@ func (p *Parser) Parse(ctx context.Context, token string) (Claims, error) {
 func (p *Parser) getKeyFunc(ctx context.Context) func(token *jwtgo.Token) (interface{}, error) {
 	return func(token *jwtgo.Token) (i interface{}, err error) {
 		switch signAlg := token.Method.Alg(); signAlg {
-		case "none": //nolint:goconst
+		case "none": // nolint:goconst // String literal used once for JWT algorithm check, not worth extracting
 			return nil, jwtgo.NoneSignatureTypeDisallowedError
 
 		case "RS256", "RS384", "RS512":

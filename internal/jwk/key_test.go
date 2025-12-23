@@ -122,8 +122,8 @@ func TestDecodePrivateKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, privKey)
 	require.IsType(t, &rsa.PrivateKey{}, privKey)
-	require.Equal(t, n, privKey.(*rsa.PrivateKey).PublicKey.N)
-	require.Equal(t, int(e.Int64()), privKey.(*rsa.PrivateKey).PublicKey.E)
+	require.Equal(t, n, privKey.(*rsa.PrivateKey).N)
+	require.Equal(t, int(e.Int64()), privKey.(*rsa.PrivateKey).E)
 }
 
 func TestDecodePrivateKeyFails(t *testing.T) {

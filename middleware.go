@@ -140,6 +140,7 @@ func JWTAuthMiddleware(errorDomain string, jwtParser JWTParser, opts ...JWTAuthM
 	}
 }
 
+// nolint:funlen // ServeHTTP handles multiple error cases and auth flows, keeping logic together improves readability
 func (h *jwtAuthHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	logger := idputil.GetLoggerFromProvider(r.Context(), h.loggerProvider)
 

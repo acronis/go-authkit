@@ -1,78 +1,91 @@
-linters-settings:
-  gocyclo:
-    min-complexity: 25
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  misspell:
-    locale: US
-  lll:
-    line-length: 140
-  goimports:
-    local-prefixes: github.com/acronis/go-authkit/
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-      - style
-      - experimental
-    disabled-checks:
-      - whyNoLint
-      - paramTypeCombine
-      - sloppyReassign
-    settings:
-      hugeParam:
-        sizeThreshold: 256
-      rangeValCopy:
-        sizeThreshold: 256
-  funlen:
-    lines: 120
-    statements: 60
+version: "2"
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/acronis/go-authkit/
 
 linters:
-  disable-all: true
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    gocyclo:
+      min-complexity: 15
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    govet:
+      settings:
+        printf:
+          funcs:
+            - (github.com/acronis/go-appkit/log.FieldLogger).Infof
+            - (github.com/acronis/go-appkit/log.FieldLogger).Warnf
+            - (github.com/acronis/go-appkit/log.FieldLogger).Errorf
+            - (github.com/acronis/go-appkit/log.FieldLogger).Debugf
+    misspell:
+      locale: US
+    lll:
+      line-length: 140
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+        - experimental
+      disabled-checks:
+        - paramTypeCombine
+        - rangeValCopy
+      settings:
+        hugeParam:
+          sizeThreshold: 256
+    funlen:
+      lines: 100
+      statements: 50
+
   enable:
     - bodyclose
     - dogsled
+    - dupl
     - errcheck
-    - exportloopref
     - funlen
-    - gochecknoinits
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - lll
     - misspell
     - nakedret
+    - revive
     - staticcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
     - unused
     - whitespace
 
-issues:
-  # Don't use default excluding to be sure all exported things (method, functions, consts and so on) have comments.
-  exclude-use-default: false
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - dogsled
-        - ineffassign
-        - funlen
-        - gocritic
-        - gocyclo
-        - gosec
-        - goconst
-        - govet
-        - lll
-        - staticcheck
-        - unused
-        - unparam
+  exclusions:
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - dogsled
+          - dupl
+          - errcheck
+          - funlen
+          - goconst
+          - gocritic
+          - gocyclo
+          - gosec
+          - govet
+          - lll
+          - ineffassign
+          - noctx
+          - unparam
+          - unused

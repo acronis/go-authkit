@@ -10,6 +10,6 @@ import "unsafe"
 
 // StringToBytesUnsafe converts string to byte slice without memory allocation.
 func StringToBytesUnsafe(s string) []byte {
-	// nolint: gosec // memory optimization to prevent redundant slice copying
+	// nolint:gosec // G103: Use of unsafe package for memory optimization to prevent redundant slice copying
 	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
