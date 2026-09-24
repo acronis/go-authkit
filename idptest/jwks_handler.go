@@ -16,6 +16,13 @@ import (
 // TestKeyID is a key ID of the pre-defined key for testing.
 const TestKeyID = "fac01c070cd08ba08809762da6e4f74af14e4790"
 
+const (
+	testKeyAlgorithm = "RS256"
+	testKeyExponent  = "AQAB"
+	testKeyType      = "RSA"
+	testKeyUse       = "sig"
+)
+
 // TestPlainPrivateJWK is a plaintext representation of the pre-defined private key for testing.
 // nolint:lll // JSON Web Key constant contains long base64-encoded values that cannot be reasonably split
 const TestPlainPrivateJWK = `
@@ -47,22 +54,22 @@ type PublicJWK struct {
 func GetTestPublicJWKS() []PublicJWK {
 	return []PublicJWK{
 		{
-			Alg: "RS256",
-			E:   "AQAB",
+			Alg: testKeyAlgorithm,
+			E:   testKeyExponent,
 			Kid: TestKeyID,
-			Kty: "RSA",
+			Kty: testKeyType,
 			// nolint:lll // RSA modulus is a long base64-encoded value that cannot be reasonably split
 			N:   "mWeDDhcnVdKWbYGubOB7v1rZ395noYk-MFV0Ik78nLsJc1Ni3-GaWpJOTfCFivDP6DcS68Q04olx6_CleaDWU2KHeZE9PuJcW1_Xot3w1U2WZYpzl5_E5jqHjq1-nnOfe5Mq5SbpoZi3o3-QjktiSgaZ6w-575anM-6VhfxyS0s_DKGJHzyka1hJIoGb8vBstKS6oVLcgjQO3JR_Uy4XMdO9s3z-t3_4sO7qtHuEmqFUnaUx5MuLmZnV0hWyLHoNtEQZrf6X5lcnSj-6QerRihJdQeFDm494D96UwjKt70xgbAMvY-H2RcCJ5IqB2jvumqACt70twX7VCeS8FDMP_w",
-			Use: "sig",
+			Use: testKeyUse,
 		},
 		{
-			Alg: "RS256",
-			E:   "AQAB",
+			Alg: testKeyAlgorithm,
+			E:   testKeyExponent,
 			Kid: "737c5114f09b5ed05276bd4b520245982f7fb29f",
-			Kty: "RSA",
+			Kty: testKeyType,
 			// nolint:lll // RSA modulus is a long base64-encoded value that cannot be reasonably split
 			N:   "51gGypRFvhTziiCLW3emsFx80G3ljpoYdDdieYM-yfvv6cfpkiEnxRRig5JdJ62vrENgbZi1GZpvTs3B7ly7Z4FI6EM-5e8vIkQSYuE3sXU7QsxEFjtMUm31kao4179gmIIrycHl5M1HE2FU2Ssgf7VuKIVmLvDypNHgBb8cV2XKu_PiGHk2turbKZXxegJTiMBYrgKSaEuBUi3WC3j-onHmQriThchQujmXVMFQ-5syNkUX7hM8PKKONkFUhKANnh0Om8_Sc3bcYZAIoFA2cD-PXopJUQa8GLRfWLExVHRvp-4_vtDYbEAeipPYz2cRmEoMKiLRk8ZpLI6M71ugLQ",
-			Use: "sig",
+			Use: testKeyUse,
 		},
 	}
 }

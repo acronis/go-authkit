@@ -33,9 +33,10 @@ func main() {
 }
 
 const (
-	usernameUser   = "user"
-	usernameAdmin  = "admin"
-	usernameAdmin2 = "admin2"
+	usernameUser      = "user"
+	usernameAdmin     = "admin"
+	usernameAdmin2    = "admin2"
+	resourceNamespace = "my_service"
 )
 
 func runApp() error {
@@ -90,7 +91,7 @@ func (dti *demoTokenIntrospector) IntrospectToken(r *http.Request, token string)
 	}
 	defClaims := claims.(*jwt.DefaultClaims) // type assertion is safe here since we don't use custom claims
 	if defClaims.Subject == usernameAdmin2 {
-		defClaims.Scope = append(defClaims.Scope, jwt.AccessPolicy{ResourceNamespace: "my_service", Role: "admin"})
+		defClaims.Scope = append(defClaims.Scope, jwt.AccessPolicy{ResourceNamespace: resourceNamespace, Role: usernameAdmin})
 	}
 	return &idptoken.DefaultIntrospectionResult{Active: true, TokenType: "Bearer", DefaultClaims: *defClaims}, nil
 }
@@ -109,7 +110,7 @@ func (dcp *demoClaimsProvider) Provide(r *http.Request) (jwt.Claims, error) {
 		claims.Subject = usernameUser
 	case username == usernameAdmin && password == "admin-pwd":
 		claims.Subject = usernameAdmin
-		claims.Scope = []jwt.AccessPolicy{{ResourceNamespace: "my_service", Role: "admin"}}
+		claims.Scope = []jwt.AccessPolicy{{ResourceNamespace: resourceNamespace, Role: usernameAdmin}}
 	case username == usernameAdmin2 && password == "admin2-pwd":
 		claims.Subject = usernameAdmin2
 	default:
