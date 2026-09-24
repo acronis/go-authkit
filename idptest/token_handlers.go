@@ -99,6 +99,7 @@ func (h *TokenHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ExpiresIn:   expiresIn,
 	}
 	rw.Header().Set("Content-Type", "application/json")
+	// #nosec G117 -- The token endpoint must include the access token in its JSON response.
 	if err = json.NewEncoder(rw).Encode(response); err != nil {
 		http.Error(rw, fmt.Sprintf("Error encoding response: %v", err), http.StatusInternalServerError)
 		return
