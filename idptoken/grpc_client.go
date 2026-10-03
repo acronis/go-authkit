@@ -209,14 +209,16 @@ func (c *GRPCClient) IntrospectToken(
 		req.ScopeFilter[i] = &pb.IntrospectionScopeFilter{ResourceNamespace: scopeFilter[i].ResourceNamespace}
 	}
 
+	var md = make(metadata.MD)
 	if sessID := c.getSessionID(); sessID != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaSessionID, sessID)
+		md.Append(grpcMetaSessionID, sessID)
 	} else {
-		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaAuthorization, makeBearerToken(accessToken))
+		md.Append(grpcMetaAuthorization, makeBearerToken(accessToken))
 	}
 	if c.requestIDProvider != nil {
-		ctx = metadata.AppendToOutgoingContext(ctx, grpcMetaRequestID, c.requestIDProvider(ctx))
+		md.Append(grpcMetaRequestID, c.requestIDProvider(ctx))
 	}
+	ctx = metadata.NewOutgoingContext(ctx, md)
 
 	var headerMD metadata.MD
 	var resp *pb.IntrospectTokenResponse
