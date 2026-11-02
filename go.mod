@@ -3,7 +3,7 @@ module github.com/acronis/go-authkit
 go 1.26.0
 
 require (
-	github.com/acronis/go-appkit v1.34.0
+	github.com/acronis/go-appkit v1.36.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -19,7 +19,6 @@ require (
 )
 
 require (
-	github.com/RussellLuo/slidingwindow v0.0.0-20200528002341-535bb99d338b // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
