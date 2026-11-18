@@ -3,7 +3,7 @@ module github.com/acronis/go-authkit
 go 1.26.0
 
 require (
-	github.com/acronis/go-appkit v1.36.0
+	github.com/acronis/go-appkit v1.37.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -19,6 +19,8 @@ require (
 )
 
 require (
+	github.com/acronis/logf v1.5.0 // indirect
+	github.com/acronis/logftext v1.1.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -34,8 +36,6 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/ssgreg/logf v1.5.0 // indirect
-	github.com/ssgreg/logftext v1.1.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/throttled/throttled/v2 v2.15.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
