@@ -210,6 +210,25 @@ func main() {
 }
 ```
 
+`provider.Invalidate()` clears the whole token cache.
+To invalidate only one token (for example, after a 401 response for a request that used it), use `GetTokenWithInvalidator`.
+The returned function removes only the cache entry of this token and returns true if it removed it.
+It does nothing and returns false if the entry is already gone or holds a reissued token,
+or if an invalidator already removed this entry less than `ProviderOpts.MinInvalidationInterval` (15 minutes by default) ago.
+`idptoken.Provider` implements `httpclient.InvalidatableAuthProvider` from go-appkit,
+so `httpclient.InvalidatableAuthBearerRoundTripper` can use it to retry a request after a 401 with a new token:
+
+```go
+accessToken, invalidate, err := provider.GetTokenWithInvalidator(ctx)
+if err != nil {
+	log.Fatalf("failed to get access token: %v", err)
+}
+// ...
+if resp.StatusCode == http.StatusUnauthorized {
+	invalidate()
+}
+```
+
 ## Extensions
 
 go-authkit provides an extensions system for vendor-specific implementations in the [extensions](./extensions) directory. 
