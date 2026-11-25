@@ -29,6 +29,10 @@ import (
 	"github.com/acronis/go-authkit/internal/metrics"
 )
 
+// DefaultMinInvalidationInterval is the default minimum time between two removals of the same cache entry
+// by the invalidators that GetTokenWithInvalidator returns.
+const DefaultMinInvalidationInterval = 15 * time.Minute
+
 const (
 	defaultMinRefreshPeriod = time.Second * 10
 	defaultExpirationOffset = time.Minute * 30
@@ -174,6 +178,10 @@ type MultiSourceProvider struct {
 	sfGroup       singleflight.Group
 
 	nextRefresh atomic.Value // time.Time
+
+	minInvalidationInterval time.Duration
+	invalidationMu          sync.Mutex
+	invalidatedAt           map[string]time.Time // cache key -> time of the last removal by an invalidator
 }
 
 // NewMultiSourceProvider returns a new instance of MultiSourceProvider with default settings
@@ -194,9 +202,14 @@ func NewMultiSourceProviderWithOpts(sources []Source, opts ProviderOpts) *MultiS
 		httpClient:       opts.HTTPClient,
 	}
 	p.nextRefresh.Store(zeroTime)
+	p.minInvalidationInterval = opts.MinInvalidationInterval
+	p.invalidatedAt = make(map[string]time.Time)
 
 	if p.minRefreshPeriod == 0 {
 		p.minRefreshPeriod = defaultMinRefreshPeriod
+	}
+	if p.minInvalidationInterval == 0 {
+		p.minInvalidationInterval = DefaultMinInvalidationInterval
 	}
 	if p.cache == nil {
 		p.cache = NewInMemoryTokenCache()
@@ -241,13 +254,56 @@ func (p *MultiSourceProvider) GetToken(
 func (p *MultiSourceProvider) GetTokenWithHeaders(
 	ctx context.Context, clientID, sourceURL string, headers map[string]string, scope ...string,
 ) (string, error) {
-	return p.ensureToken(ctx, clientID, sourceURL, headers, scope)
+	token, _, err := p.ensureToken(ctx, clientID, sourceURL, headers, scope)
+	return token.Data, err
+}
+
+// GetTokenWithInvalidator returns raw token for `clientID`, `sourceURL` and `scope`, and a function that invalidates it.
+// The invalidator removes only the cache entry of the returned token and reports whether it removed it.
+// It does nothing if the entry holds another token already,
+// or if an invalidator removed this entry less than ProviderOpts.MinInvalidationInterval ago.
+// The invalidator is never nil, is idempotent and is safe for concurrent use.
+// The removal is not atomic with a concurrent reissue of the token (TokenCache has no compare-and-delete),
+// so in rare cases it removes the reissued token, and the next call issues one more token.
+func (p *MultiSourceProvider) GetTokenWithInvalidator(
+	ctx context.Context, clientID, sourceURL string, scope ...string,
+) (token string, invalidate func() bool, err error) {
+	data, key, err := p.ensureToken(ctx, clientID, sourceURL, nil, scope)
+	if err != nil {
+		return "", func() bool { return false }, err
+	}
+	return data.Data, p.makeTokenInvalidator(key, data.Data), nil
 }
 
 // Invalidate fully invalidates all tokens cache
 func (p *MultiSourceProvider) Invalidate() {
 	p.cache.ClearAll()
 	p.setNextRefresh(zeroTime)
+}
+
+func (p *MultiSourceProvider) makeTokenInvalidator(key, token string) func() bool {
+	return func() bool {
+		p.invalidationMu.Lock()
+		defer p.invalidationMu.Unlock()
+
+		now := time.Now()
+		for k, at := range p.invalidatedAt {
+			if now.Sub(at) >= p.minInvalidationInterval {
+				delete(p.invalidatedAt, k)
+			}
+		}
+		if _, throttled := p.invalidatedAt[key]; throttled {
+			return false
+		}
+
+		details := p.cache.Get(key)
+		if details == nil || details.token.Data != token {
+			return false
+		}
+		p.cache.Delete(key)
+		p.invalidatedAt[key] = now
+		return true
+	}
 }
 
 // RefreshTokensPeriodically starts a goroutine which refreshes tokens
@@ -279,33 +335,34 @@ func (p *MultiSourceProvider) issueTokenAndCache(
 	return v.(tokenData), nil
 }
 
+// ensureToken returns the token and its cache key.
 func (p *MultiSourceProvider) ensureToken(
 	ctx context.Context, clientID, sourceURL string, customHeaders map[string]string, scope []string,
-) (string, error) {
+) (tokenData, string, error) {
 	p.tokenIssuersMu.RLock()
 	issuer, found := p.tokenIssuers[keyForIssuer(clientID, sourceURL)]
 	p.tokenIssuersMu.RUnlock()
 	if !found {
-		return "", ErrSourceNotRegistered
+		return tokenData{}, "", ErrSourceNotRegistered
 	}
 
 	headersProvider := mergedHeaders(p.customHeaders, customHeaders)
 
 	tokenURL, err := issuer.ensureTokenURL(ctx, headersProvider)
 	if err != nil {
-		return "", err
+		return tokenData{}, "", err
 	}
 
 	sortedScope := uniqAndSort(scope)
 	tokenKey := keyForCache(clientID, tokenURL, sortedScope)
 	var token tokenData
 	if token, err = p.getCachedTokenAndValidate(tokenKey); err == nil {
-		return token.Data, nil
+		return token, tokenKey, nil
 	}
 	if token, err = p.issueTokenAndCache(ctx, issuer, headersProvider, sortedScope, tokenKey); err != nil {
-		return "", err
+		return tokenData{}, "", err
 	}
-	return token.Data, nil
+	return token, tokenKey, nil
 }
 
 func (p *MultiSourceProvider) cacheToken(token tokenData, issuerURL string) {
@@ -536,6 +593,14 @@ func (mp *Provider) GetTokenWithHeaders(
 	return mp.provider.GetTokenWithHeaders(ctx, mp.source.ClientID, mp.source.URL, headers, scope...)
 }
 
+// GetTokenWithInvalidator returns raw token for `scope`, and a function that invalidates it.
+// See MultiSourceProvider.GetTokenWithInvalidator for details.
+func (mp *Provider) GetTokenWithInvalidator(
+	ctx context.Context, scope ...string,
+) (token string, invalidate func() bool, err error) {
+	return mp.provider.GetTokenWithInvalidator(ctx, mp.source.ClientID, mp.source.URL, scope...)
+}
+
 func (mp *Provider) Invalidate() {
 	mp.provider.Invalidate()
 }
@@ -717,6 +782,13 @@ type ProviderOpts struct {
 	// MinRefreshPeriod is a minimal possible refresh interval for MultiSourceProvider's token cache.
 	MinRefreshPeriod time.Duration
 
+	// MinInvalidationInterval is the minimum time between two removals of the same cache entry
+	// by the invalidators that GetTokenWithInvalidator returns. The first removal of an entry is never delayed.
+	// This prevents excessive calls to the token endpoint when an upstream keeps rejecting new tokens.
+	// Invalidate does not use it and does not reset it.
+	// Zero means DefaultMinInvalidationInterval. A negative value turns the throttling off.
+	MinInvalidationInterval time.Duration
+
 	// CustomHeaders is a map of custom headers to be used in all HTTP requests.
 	CustomHeaders map[string]string
 
@@ -732,6 +804,7 @@ func uniqAndSort(s []string) []string {
 	if len(s) <= 1 {
 		return s
 	}
+	s = append([]string(nil), s...) // The caller's slice may be shared between goroutines.
 	sort.Strings(s)
 	j := 0
 	for i := 1; i < len(s); i++ {
